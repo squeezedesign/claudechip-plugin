@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 
 from aiohttp import WSMsgType, web
@@ -26,6 +27,7 @@ log = logging.getLogger("bridge")
 LOOPBACK = {"127.0.0.1", "::1"}
 STATE_DEBOUNCE_S = 0.2  # coalesce bursts of hook events into one state message
 AUTH_TIMEOUT_S = 5
+LIVENESS_EVERY_S = 15   # how often to check that session processes are alive
 
 
 class Bridge:
@@ -36,6 +38,8 @@ class Bridge:
         self.devices: set[web.WebSocketResponse] = set()
         # Plan usage from the status line: {"five_hour": (pct, resets_at), ...}
         self.usage: dict[str, tuple[float, float]] = {}
+        # Claude Code process of each session, sent by the hooks as X-Claude-Pid
+        self.pids: dict[str, int] = {}
         self._state_task: asyncio.Task | None = None
 
         self.app = web.Application()
@@ -162,6 +166,9 @@ class Bridge:
             data = await request.json()
         except ValueError:
             raise web.HTTPBadRequest()
+        pid = request.headers.get("X-Claude-Pid", "")
+        if pid.isdigit() and data.get("session_id"):
+            self.pids[data["session_id"]] = int(pid)
 
         handler = getattr(self, f"on_{event}", None)
         if handler is None:
@@ -179,12 +186,29 @@ class Bridge:
         self.schedule_state()
 
     async def on_SessionEnd(self, data: dict) -> None:
-        s = self.sessions.remove(data.get("session_id", ""))
+        await self._end_session(data.get("session_id", ""), "session ended")
+
+    async def _end_session(self, session_id: str, reason: str) -> None:
+        self.pids.pop(session_id, None)
+        s = self.sessions.remove(session_id)
         if s:
-            log.info("[%s] session ended", s.name)
+            log.info("[%s] %s", s.name, reason)
             for p in self.perms.for_session(s.id):
                 await self._cancel_permission(p)
             self.schedule_state()
+
+    async def watch_liveness(self) -> None:
+        """Drop sessions whose Claude Code process is gone without a SessionEnd
+        (crash, window reload, killed terminal)."""
+        while True:
+            await asyncio.sleep(LIVENESS_EVERY_S)
+            for session_id, pid in list(self.pids.items()):
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    await self._end_session(session_id, f"session gone (process {pid} ended)")
+                except PermissionError:
+                    pass  # exists, owned by someone else
 
     async def on_UserPromptSubmit(self, data: dict) -> None:
         await self._answered_elsewhere(data)
@@ -329,9 +353,11 @@ async def serve(cfg: Config) -> None:
 
     advertiser = Advertiser(cfg)
     await advertiser.start()
+    liveness = asyncio.create_task(bridge.watch_liveness())
     log.info("bridge %s listening on port %d (mDNS %s)", cfg.account, cfg.port, advertiser.name)
     try:
         await asyncio.Event().wait()
     finally:
+        liveness.cancel()
         await advertiser.stop()
         await runner.cleanup()

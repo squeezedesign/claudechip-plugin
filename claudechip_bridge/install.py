@@ -94,8 +94,9 @@ def _hook(cfg: Config, event: str) -> dict:
     if max_time is None:
         command = f"{SYSTEM_PYTHON} {FORWARDER} {cfg.hook_base_url}{event}"
     else:
+        # $PPID is the Claude Code process: the bridge drops the session when it dies
         command = (f"curl -s -m {max_time} -X POST -H 'Content-Type: application/json' "
-                   f"--data-binary @- {cfg.hook_base_url}{event} || true")
+                   f"-H \"X-Claude-Pid: $PPID\" --data-binary @- {cfg.hook_base_url}{event} || true")
     hook = {"type": "command", "command": command}
     if run_async:
         hook["async"] = True
