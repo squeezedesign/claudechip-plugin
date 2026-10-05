@@ -1,7 +1,8 @@
 """Bridge server.
 
 One aiohttp app on a single port:
-  GET  /ws            WebSocket for the Claude Chip device (LAN)
+  GET  /ws            WebSocket for the Claude Chip device (LAN), paired and signed
+  POST /pair, /revoke pairing commands from this Mac (loopback only)
   POST /hook/{event}  Claude Code HTTP hooks (loopback only)
   POST /statusline    status line data: context and plan usage (loopback only)
 """
@@ -12,14 +13,18 @@ import asyncio
 import errno
 import json
 import logging
+import hmac
 import os
+import secrets
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
 from . import describe
 from .config import Config
+from .identity import DATA_DIR, Devices, bridge_id, sign
 from .permissions import Permissions
 from .sessions import ASK, DONE, ERR, PERM, WORK, SessionStore
 from .summary import clip, summarize
@@ -28,16 +33,32 @@ log = logging.getLogger("bridge")
 
 LOOPBACK = {"127.0.0.1", "::1"}
 STATE_DEBOUNCE_S = 0.2  # coalesce bursts of hook events into one state message
-AUTH_TIMEOUT_S = 5
+PAIR_TTL_S = 300         # a pairing code is valid for 5 minutes
 LIVENESS_EVERY_S = 15   # how often to check that session processes are alive
-STATE_FILE = Path.home() / ".config" / "claudechip" / "sessions.json"
+STATE_FILE = DATA_DIR / "sessions.json"
 USAGE_POLL_S = 120           # direct usage reads (usage_source = "auto")
 USAGE_FRESH_S = 600          # while direct reads work, ignore the status line
+
+
+@dataclass
+class _Conn:
+    """One device WebSocket."""
+    ws: web.WebSocketResponse
+    peer: str
+    nonce: str              # random per connection: part of every signature
+    device_id: str = ""
+    token: str | None = None  # set once authenticated
+    seq: int = 0            # last accepted message counter
 
 
 class Bridge:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
+        self.bridge_id = bridge_id()
+        self.paired = Devices()
+        self.conns: dict[web.WebSocketResponse, _Conn] = {}
+        # Pending pairings: code -> (connection, expiry), None if ambiguous
+        self.pairing: dict[str, tuple[_Conn, float] | None] = {}
         self.sessions = SessionStore()
         self.perms = Permissions()
         self.devices: set[web.WebSocketResponse] = set()
@@ -53,6 +74,8 @@ class Bridge:
             web.get("/ws", self.handle_ws),
             web.post("/hook/{event}", self.handle_hook),
             web.post("/statusline", self.handle_statusline),
+            web.post("/pair", self.handle_pair),
+            web.post("/revoke", self.handle_revoke),
         ])
 
     # ------------------------------------------------------------------
@@ -60,8 +83,8 @@ class Bridge:
     # ------------------------------------------------------------------
 
     def hello_msg(self) -> dict:
-        return {"type": "hello", "account": self.cfg.account, "mac": self.cfg.mac,
-                "color": self.cfg.color}
+        return {"type": "hello", "proto": 2, "bridge": self.bridge_id, "account": self.cfg.account,
+                "mac": self.cfg.mac, "color": self.cfg.color}
 
     def _update_usage(self, window: str, pct: float, resets_at: float) -> bool:
         """Keep the freshest reading. Within one window usage only grows, so an
@@ -121,32 +144,15 @@ class Bridge:
         self._state_task = asyncio.create_task(later())
 
     # ------------------------------------------------------------------
-    # Device WebSocket
+    # Device WebSocket: pairing and authentication (SPEC §7.3)
     # ------------------------------------------------------------------
 
     async def handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(heartbeat=20)
         await ws.prepare(request)
-        peer = request.remote
-
-        # The first message must be a hello carrying the token
-        try:
-            first = await ws.receive(timeout=AUTH_TIMEOUT_S)
-            hello = json.loads(first.data) if first.type == WSMsgType.TEXT else {}
-        except (asyncio.TimeoutError, ValueError):
-            hello = {}
-        if hello.get("type") != "hello" or not self._token_ok(hello):
-            log.warning("device %s rejected: bad or missing token", peer)
-            await ws.close(code=4401, message=b"unauthorized")
-            return ws
-
-        log.info("device %s connected (%s)", peer, hello.get("device", "?"))
-        self.devices.add(ws)
-        await ws.send_json(self.hello_msg())
-        await ws.send_json(self.state_msg())
-        for p in self.perms.all():  # requests that arrived while it was away
-            await ws.send_json(p.to_json())
-
+        conn = _Conn(ws=ws, peer=request.remote or "?", nonce=secrets.token_hex(16))
+        # Who we are, before any authentication: nothing secret in here
+        await ws.send_json({**self.hello_msg(), "nonce": conn.nonce})
         try:
             async for msg in ws:
                 if msg.type != WSMsgType.TEXT:
@@ -155,17 +161,99 @@ class Bridge:
                     data = json.loads(msg.data)
                 except ValueError:
                     continue
-                if not self._token_ok(data):
-                    log.warning("device %s: message without a valid token dropped", peer)
-                    continue
-                await self.on_device_message(data)
+                if conn.token:
+                    await self._on_signed(conn, data)
+                else:
+                    await self._on_unauthenticated(conn, data)
         finally:
             self.devices.discard(ws)
-            log.info("device %s disconnected", peer)
+            self.conns.pop(ws, None)
+            for code in [c for c, entry in self.pairing.items() if entry and entry[0] is conn]:
+                del self.pairing[code]
+            log.info("device %s disconnected", conn.device_id or conn.peer)
         return ws
 
-    def _token_ok(self, data: dict) -> bool:
-        return data.get("token") == self.cfg.dev_token
+    async def _on_unauthenticated(self, conn: "_Conn", data: dict) -> None:
+        kind = data.get("type")
+        device_id = str(data.get("device", ""))[:32]
+        if kind == "auth":
+            # The device proves it knows its token without sending it
+            token = self.paired.token(device_id)
+            device_nonce = str(data.get("nonce", ""))
+            expected = sign(token, f"auth:{conn.nonce}:{device_nonce}:{device_id}") if token else ""
+            if not token or not hmac.compare_digest(expected, str(data.get("mac", ""))):
+                log.warning("device %s (%s): authentication failed", device_id or "?", conn.peer)
+                await conn.ws.send_json({"type": "auth_fail"})
+                return
+            conn.token, conn.device_id = token, device_id
+            # And the bridge proves it too, so the device knows it is talking to us
+            await conn.ws.send_json({"type": "auth_ok", "mac": sign(token, f"ok:{device_nonce}:{conn.nonce}")})
+            self.devices.add(conn.ws)
+            self.conns[conn.ws] = conn
+            log.info("device %s connected (%s)", device_id, conn.peer)
+            await conn.ws.send_json(self.state_msg())
+            for p in self.perms.all():  # requests that arrived while it was away
+                await conn.ws.send_json(p.to_json())
+        elif kind == "pair_request":
+            code = str(data.get("code", ""))
+            if len(code) != 6 or not code.isdigit() or not device_id:
+                return
+            conn.device_id = device_id
+            existing = self.pairing.get(code)
+            # Two devices showing the same code: refuse both rather than guess
+            self.pairing[code] = None if existing and existing[0] is not conn else (conn, time.time() + PAIR_TTL_S)
+            # The code is not logged on purpose: it must be read on the device itself
+            log.info("device %s asks to pair: run 'claudechip-bridge pair <code on its screen>'", device_id)
+
+    async def _on_signed(self, conn: "_Conn", data: dict) -> None:
+        """After authentication every message is {"seq", "msg", "sig"}: sig is the
+        HMAC of "<connection nonce>:<seq>:<msg>" and seq always grows, so a
+        captured message can be neither forged nor replayed."""
+        try:
+            seq, body, sig = int(data["seq"]), str(data["msg"]), str(data["sig"])
+        except (KeyError, TypeError, ValueError):
+            log.warning("device %s: unsigned message dropped", conn.device_id)
+            return
+        if seq <= conn.seq or not hmac.compare_digest(sign(conn.token, f"{conn.nonce}:{seq}:{body}"), sig):
+            log.warning("device %s: bad signature or replayed message dropped", conn.device_id)
+            return
+        conn.seq = seq
+        try:
+            await self.on_device_message(json.loads(body))
+        except ValueError:
+            pass
+
+    async def handle_pair(self, request: web.Request) -> web.Response:
+        """POST /pair {"code"}: from 'claudechip-bridge pair <code>' on this Mac."""
+        if request.remote not in LOOPBACK:
+            raise web.HTTPForbidden()
+        code = str((await request.json()).get("code", "")).replace(" ", "")
+        now = time.time()
+        for c in [c for c, e in self.pairing.items() if e and e[1] < now]:
+            del self.pairing[c]
+        if code not in self.pairing:
+            return web.json_response({"ok": False, "error": "no device is showing that code (or it expired)"})
+        entry = self.pairing.pop(code)
+        if entry is None:
+            return web.json_response({"ok": False, "error": "two devices showed that code; start again"})
+        conn = entry[0]
+        token = self.paired.pair(conn.device_id)
+        await conn.ws.send_json({"type": "paired", "token": token})
+        log.info("device %s paired", conn.device_id)
+        return web.json_response({"ok": True, "device": conn.device_id})
+
+    async def handle_revoke(self, request: web.Request) -> web.Response:
+        """POST /revoke {"device"}: forget a device and drop its connection."""
+        if request.remote not in LOOPBACK:
+            raise web.HTTPForbidden()
+        full = self.paired.revoke(str((await request.json()).get("device", "")))
+        if not full:
+            return web.json_response({"ok": False, "error": "no single device matches that id"})
+        for conn in [c for c in self.conns.values() if c.device_id == full]:
+            await conn.ws.send_json({"type": "revoked"})
+            await conn.ws.close(code=4401, message=b"revoked")
+        log.info("device %s revoked", full)
+        return web.json_response({"ok": True, "device": full})
 
     async def on_device_message(self, data: dict) -> None:
         kind = data.get("type")

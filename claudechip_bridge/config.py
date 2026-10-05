@@ -22,7 +22,7 @@ class Config:
     port: int = 8765
     summary: str = "deck_line"
     usage_source: str = "auto"
-    dev_token: str = ""
+    dev_token: str = ""  # obsolete since pairing; accepted and ignored
 
     @property
     def hook_base_url(self) -> str:
@@ -53,6 +53,4 @@ def load(path: Path | None = None) -> Config:
         raise SystemExit(f"summary must be one of {SUMMARY_METHODS}, got {cfg.summary!r}")
     if cfg.usage_source not in USAGE_SOURCES:
         raise SystemExit(f"usage_source must be one of {USAGE_SOURCES}, got {cfg.usage_source!r}")
-    if not cfg.dev_token or cfg.dev_token == "change-me":
-        raise SystemExit("set a dev_token in the config (and the same BRIDGE_TOKEN in the firmware)")
     return cfg

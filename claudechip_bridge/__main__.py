@@ -4,13 +4,19 @@
   uv run claudechip-bridge install     add hooks + status line to ~/.claude
   uv run claudechip-bridge uninstall   remove them
   uv run claudechip-bridge usage-check check that plan usage can be read directly
+  uv run claudechip-bridge pair 123456 pair the device showing that code
+  uv run claudechip-bridge devices     list paired devices
+  uv run claudechip-bridge revoke ID   forget a device (id or prefix)
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from . import config, install
@@ -19,7 +25,9 @@ from .server import serve
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="claudechip-bridge")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "install", "uninstall", "usage-check"])
+    parser.add_argument("command", nargs="?", default="run",
+                        choices=["run", "install", "uninstall", "usage-check", "pair", "devices", "revoke"])
+    parser.add_argument("arg", nargs="?", help="pair: the code; revoke: the device id")
     parser.add_argument("--config", type=Path, help="config file (default: bridge/config.toml)")
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     parser.add_argument("--raw", action="store_true", help="usage-check: print the full answer")
@@ -40,6 +48,18 @@ def main() -> None:
     logging.getLogger("zeroconf").setLevel(logging.CRITICAL)
     cfg = config.load(args.config)
 
+    if args.command in ("pair", "revoke"):
+        _local_command(cfg, args.command, args.arg)
+        return
+    if args.command == "devices":
+        from .identity import Devices
+        devices = Devices().all()
+        if not devices:
+            print("no paired devices")
+        for device_id, info in devices.items():
+            print(f"{device_id}   paired {info.get('paired_at', '?')}")
+        return
+
     if args.command == "install":
         install.install(cfg)
     elif args.command == "uninstall":
@@ -53,3 +73,23 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _local_command(cfg, command: str, arg: str | None) -> None:
+    """pair / revoke talk to the running bridge on this Mac."""
+    if not arg:
+        raise SystemExit(f"usage: claudechip-bridge {command} <{'code' if command == 'pair' else 'device id'}>")
+    key = "code" if command == "pair" else "device"
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{cfg.port}/{command}",
+        data=json.dumps({key: arg}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            answer = json.loads(resp.read())
+    except urllib.error.URLError:
+        raise SystemExit("the bridge is not running: start it with 'uv run claudechip-bridge'")
+    if not answer.get("ok"):
+        raise SystemExit(f"{command} failed: {answer.get('error')}")
+    print(f"{'paired' if command == 'pair' else 'revoked'}: {answer['device']}")

@@ -12,7 +12,7 @@ mDNS as `_claudechip._tcp`).
 ```sh
 brew install uv
 git clone https://github.com/<owner>/claudechip-plugin && cd claudechip-plugin
-cp config.example.toml config.toml   # set account, mac, color, dev_token
+cp config.example.toml config.toml   # set account, mac and color
 uv sync
 uv run claudechip-bridge install     # hooks + status line in ~/.claude (backup first)
 uv run claudechip-bridge             # run it (Ctrl+C to stop)
@@ -20,6 +20,23 @@ uv run claudechip-bridge             # run it (Ctrl+C to stop)
 
 `uv run claudechip-bridge uninstall` removes the hooks, restores the previous
 status line and removes the `[DECK]` rule from `~/.claude/CLAUDE.md`.
+
+## Pairing
+
+The first time, the device shows a 6-digit code. On the Mac:
+
+```sh
+uv run claudechip-bridge pair 482913   # the code on the device screen
+uv run claudechip-bridge devices       # list paired devices
+uv run claudechip-bridge revoke <id>   # forget one (id or prefix)
+```
+
+Each device gets its own token, sent only once in the pairing reply and kept
+in `~/.config/claudechip/devices.json` and in the device. Afterwards both
+sides prove they know it with HMAC-SHA256 over a random per-connection nonce,
+and every device message is signed with a growing counter, so captured
+messages cannot be forged or replayed. The bridge never logs the code: read
+it on the device itself.
 
 ## How it works
 
@@ -42,23 +59,24 @@ status line and removes the `[DECK]` rule from `~/.claude/CLAUDE.md`.
 ## Testing without the device
 
 ```sh
-uv run python scripts/fake_device.py --token <dev_token> --answer ask
+uv run python scripts/fake_device.py --answer ask   # pairs on first run
 ```
 
 ## Protocol (JSON over WebSocket)
 
-Bridge → device: `hello` (account, mac, color), `state` (usage + sessions),
-`permission`, `permission_cancel`, `summary`. Device → bridge: `hello` with the
-token, `decision`. Every device message carries the token.
+Bridge → device: `hello` (bridge id, account, mac, color, nonce), `auth_ok`,
+`auth_fail`, `paired` (token, once), `revoked`, `state` (usage + sessions),
+`permission`, `permission_cancel`, `summary`. Device → bridge: `auth` (HMAC),
+`pair_request` (code), then signed `{"seq", "msg", "sig"}` envelopes carrying
+`decision`.
 
 ## Security
 
-The bridge only listens on the local network and rejects messages without a
-valid token. Never expose it to the internet.
+The bridge only listens on the local network, accepts only paired devices and
+signed messages. Never expose it to the internet.
 
 ## Roadmap
 
-- Pairing with a 6-digit code shown on the device (replaces `dev_token`).
 - Packaging as a Claude Code plugin: hooks bundled, `userConfig` for account /
   Mac / color, `[DECK]` rule injected at session start, bridge started in the
   background, `/claudechip:pair <code>`.

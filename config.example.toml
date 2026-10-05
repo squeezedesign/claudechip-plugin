@@ -16,7 +16,3 @@ summary = "deck_line"
 # to the status line); "statusline" only uses what terminal sessions report.
 # Check it with: uv run claudechip-bridge usage-check
 usage_source = "auto"
-
-# Temporary shared secret until pairing exists (phase 4). Must match
-# BRIDGE_TOKEN in the firmware's secrets.h.
-dev_token = "change-me"
