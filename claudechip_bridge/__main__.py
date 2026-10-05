@@ -22,6 +22,7 @@ def main() -> None:
     parser.add_argument("command", nargs="?", default="run", choices=["run", "install", "uninstall", "usage-check"])
     parser.add_argument("--config", type=Path, help="config file (default: bridge/config.toml)")
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+    parser.add_argument("--raw", action="store_true", help="usage-check: print the full answer")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -31,7 +32,7 @@ def main() -> None:
     )
     if args.command == "usage-check":
         from . import oauth_usage
-        oauth_usage.check()
+        oauth_usage.check(raw=args.raw)
         return
 
     # zeroconf logs a harmless "No route to host" traceback for interfaces

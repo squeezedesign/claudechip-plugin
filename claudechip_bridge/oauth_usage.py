@@ -72,8 +72,8 @@ def _epoch(value) -> float:
     return 0.0
 
 
-def fetch_usage(login: Login) -> dict[str, tuple[float, float]]:
-    """{"five_hour": (percent, resets_at), "seven_day": (...)}"""
+def fetch_raw(login: Login) -> dict:
+    """The endpoint's JSON answer (usage figures only, no credentials)."""
     if login.expired:
         raise UsageError("the Claude Code token has expired; it renews the next time you use Claude Code")
     req = urllib.request.Request(USAGE_URL, headers={
@@ -88,7 +88,12 @@ def fetch_usage(login: Login) -> dict[str, tuple[float, float]]:
         raise UsageError(f"usage endpoint answered HTTP {e.code}") from None
     except (urllib.error.URLError, TimeoutError, ValueError) as e:
         raise UsageError(f"usage endpoint unreachable: {e}") from None
+    return data
 
+
+def fetch_usage(login: Login) -> dict[str, tuple[float, float]]:
+    """{"five_hour": (percent, resets_at), "seven_day": (...)}"""
+    data = fetch_raw(login)
     usage = {}
     for window in WINDOWS:
         info = data.get(window)
@@ -102,10 +107,13 @@ def fetch_usage(login: Login) -> dict[str, tuple[float, float]]:
     return usage
 
 
-def check() -> None:
-    """`claudechip-bridge usage-check`: show what the bridge would read."""
+def check(raw: bool = False) -> None:
+    """`claudechip-bridge usage-check`: show what the bridge would read.
+    With raw=True, also print the endpoint's JSON answer."""
     try:
         login = read_login()
+        if raw:
+            print(json.dumps(fetch_raw(login), indent=2, ensure_ascii=False))
         print(f"Claude Code login found (plan: {login.subscription})")
         if login.expires_at:
             print(f"token valid for {max(0, (login.expires_at - time.time()) / 60):.0f} more min")
