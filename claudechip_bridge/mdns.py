@@ -26,7 +26,9 @@ def lan_ip() -> str:
 class Advertiser:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
-        self.name = f"{cfg.account.lower()}.{SERVICE_TYPE}"
+        # Unique per machine: several Macs may share an account
+        host = socket.gethostname().split(".")[0].lower()
+        self.name = f"{cfg.account.lower()}-{host}.{SERVICE_TYPE}"
         self._zc: AsyncZeroconf | None = None
         self._info: ServiceInfo | None = None
 
@@ -41,7 +43,8 @@ class Advertiser:
             server=f"{socket.gethostname().split('.')[0]}.local.",
         )
         self._zc = AsyncZeroconf()
-        await self._zc.async_register_service(self._info)
+        await self._zc.async_register_service(self._info, allow_name_change=True)
+        self.name = self._info.name
 
     async def stop(self) -> None:
         if self._zc and self._info:

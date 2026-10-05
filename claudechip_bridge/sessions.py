@@ -6,8 +6,9 @@ import os
 import time
 from dataclasses import dataclass, field
 
-# Status values understood by the device
-WORK, PERM, DONE, ERR = "work", "perm", "done", "err"
+# Status values understood by the device. ASK: Claude waits for the user in
+# the console (plan approval, a question) and the device can only call attention.
+WORK, PERM, DONE, ERR, ASK = "work", "perm", "done", "err", "ask"
 
 NAME_MAX = 23  # firmware Session::name is 24 bytes
 

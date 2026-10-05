@@ -43,8 +43,26 @@ def activity(tool_name: str, tool_input: dict) -> str:
     return clip(text)
 
 
+def user_question(tool_input: dict) -> str:
+    """First question of an AskUserQuestion call."""
+    questions = tool_input.get("questions") or []
+    first = questions[0] if questions and isinstance(questions[0], dict) else {}
+    return first.get("question") or tool_input.get("question") or "tengo una pregunta"
+
+
+def waiting_text(tool_name: str, tool_input: dict) -> str | None:
+    """Text for tools that stop and wait for the user, or None for other tools."""
+    if tool_name == "ExitPlanMode":
+        return "plan listo. revísalo en la consola."
+    if tool_name == "AskUserQuestion":
+        return clip(f"pregunta: {user_question(tool_input)}")
+    return None
+
+
 def permission_question(tool_name: str, tool_input: dict) -> str:
     """The question shown in the bubble, e.g. 'quiero ejecutar: npm install. ¿vale?'."""
+    if tool_name == "ExitPlanMode":
+        return "plan listo. ¿lo apruebo?"
     if tool_name == "Bash":
         what = f"ejecutar: {_command(tool_input)}"
     elif tool_name in _EDIT_TOOLS:

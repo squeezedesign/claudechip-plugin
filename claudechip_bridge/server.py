@@ -19,7 +19,7 @@ from aiohttp import WSMsgType, web
 from . import describe
 from .config import Config
 from .permissions import Permissions
-from .sessions import DONE, ERR, PERM, WORK, SessionStore
+from .sessions import ASK, DONE, ERR, PERM, WORK, SessionStore
 from .summary import clip, summarize
 
 log = logging.getLogger("bridge")
@@ -220,15 +220,30 @@ class Bridge:
     async def on_PreToolUse(self, data: dict) -> None:
         await self._answered_elsewhere(data)
         s = self._session(data)
-        if s.status != PERM:
-            self.sessions.update(s, status=WORK,
-                                 text=describe.activity(data.get("tool_name", ""), data.get("tool_input") or {}))
+        if s.status == PERM:
+            return
+        tool, tool_input = data.get("tool_name", ""), data.get("tool_input") or {}
+        waiting = describe.waiting_text(tool, tool_input)
+        if waiting:
+            # Plan approval or a question: Claude stops until the user answers
+            await self._ask(s, waiting)
+        else:
+            self.sessions.update(s, status=WORK, text=describe.activity(tool, tool_input))
             self.schedule_state()
+
+    async def _ask(self, s, text: str) -> None:
+        """Claude waits for the user in the console: call attention on the device."""
+        if s.status == ASK and s.text == text:
+            return
+        self.sessions.update(s, status=ASK, text=text)
+        log.info("[%s] waiting for the user: %s", s.name, text)
+        await self.broadcast({"type": "summary", "session_id": s.id, "status": ASK, "text": text})
+        self.schedule_state()
 
     async def on_PostToolUse(self, data: dict) -> None:
         await self._answered_elsewhere(data)
         s = self._session(data)
-        if s.status in (PERM, DONE):
+        if s.status in (PERM, DONE, ASK):
             self.sessions.update(s, status=WORK)
             self.schedule_state()
 
@@ -301,10 +316,26 @@ class Bridge:
         await self.broadcast({"type": "summary", "session_id": s.id, "status": ERR, "text": text})
         self.schedule_state()
 
+    # Notifications that mean "Claude is waiting for you", with the Spanish text
+    # shown on the device (Claude Code's own messages are in English).
+    # idle_prompt is left out on purpose: a finished answer already shows as done.
+    _WAITING_NOTIFICATIONS = {
+        "permission_prompt": "necesito permiso. mira la consola.",
+        "elicitation_dialog": "una herramienta pide datos. mira la consola.",
+        "agent_needs_input": "te espero en la consola.",
+    }
+
     async def on_Notification(self, data: dict) -> None:
-        # Permission prompts are handled by PermissionRequest; just log the rest
-        log.debug("notification: %s %s", data.get("type") or data.get("notification_type"),
-                  data.get("message", ""))
+        kind = data.get("notification_type") or data.get("type") or ""
+        message = data.get("message", "")
+        log.info("notification %s: %s", kind or "?", message)
+        if kind not in self._WAITING_NOTIFICATIONS:
+            return
+        s = self._session(data)
+        # A permission the device can answer is already on screen
+        if s.status == PERM or self.perms.for_session(s.id):
+            return
+        await self._ask(s, self._WAITING_NOTIFICATIONS[kind])
 
     # ------------------------------------------------------------------
     # Status line: context window and plan usage
