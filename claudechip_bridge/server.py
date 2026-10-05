@@ -170,6 +170,9 @@ class Bridge:
         pid = request.headers.get("X-Claude-Pid", "")
         if pid.isdigit() and data.get("session_id"):
             self.pids[data["session_id"]] = int(pid)
+        project = request.headers.get("X-Claude-Project", "")
+        if project:
+            data["project_dir"] = project
 
         handler = getattr(self, f"on_{event}", None)
         if handler is None:
@@ -178,7 +181,12 @@ class Bridge:
         return web.json_response(result) if result else web.Response()
 
     def _session(self, data: dict):
-        return self.sessions.get_or_create(data.get("session_id", "?"), data.get("cwd", ""))
+        session_id = data.get("session_id", "?")
+        project = data.get("project_dir", "")
+        s = self.sessions.get_or_create(session_id, project or data.get("cwd", ""))
+        if project:
+            self.sessions.set_project(session_id, project)
+        return s
 
     async def on_SessionStart(self, data: dict) -> None:
         s = self._session(data)
@@ -353,8 +361,11 @@ class Bridge:
         changed = False
         session_id = data.get("session_id")
         if session_id:
-            cwd = (data.get("workspace") or {}).get("current_dir") or data.get("cwd", "")
-            s = self.sessions.get_or_create(session_id, cwd)
+            ws = data.get("workspace") or {}
+            project = ws.get("project_dir") or ""
+            s = self.sessions.get_or_create(session_id, project or ws.get("current_dir") or data.get("cwd", ""))
+            if project:
+                self.sessions.set_project(session_id, project)
             ctx = (data.get("context_window") or {}).get("used_percentage")
             if ctx is not None and round(ctx) != s.ctx:
                 s.ctx = round(ctx)

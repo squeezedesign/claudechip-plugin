@@ -50,14 +50,20 @@ class SessionStore:
     def get(self, session_id: str) -> Session | None:
         return self._sessions.get(session_id)
 
-    def get_or_create(self, session_id: str, cwd: str) -> Session:
+    def get_or_create(self, session_id: str, folder: str) -> Session:
+        """folder should be the project root; the name is fixed when the
+        session is first seen so it does not change when Claude cd's around."""
         s = self._sessions.get(session_id)
         if s is None:
-            s = Session(id=session_id, cwd=cwd, name=session_name(cwd))
+            s = Session(id=session_id, cwd=folder, name=session_name(folder))
             self._sessions[session_id] = s
-        elif cwd and cwd != s.cwd:
-            s.cwd, s.name = cwd, session_name(cwd)
         return s
+
+    def set_project(self, session_id: str, project: str) -> None:
+        """The real project root became known: rename the tab once."""
+        s = self._sessions.get(session_id)
+        if s and project and s.cwd != project:
+            s.cwd, s.name = project, session_name(project)
 
     def update(self, s: Session, *, status: str | None = None, text: str | None = None) -> None:
         if status is not None:
