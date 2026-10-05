@@ -1,30 +1,21 @@
-"""Announce the bridge on the LAN as _claudechip._tcp."""
+"""Announce the bridge on the LAN as _claudechip._tcp with macOS's dns-sd.
+
+mDNSResponder does the actual work: it follows address changes, network
+switches and sleep/wake by itself, so the bridge never announces a stale or
+loopback address. Standard library only.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import socket
-
-from zeroconf import ServiceInfo
-from zeroconf.asyncio import AsyncZeroconf
+from typing import Optional
 
 from . import __version__
 from .config import Config
 
-SERVICE_TYPE = "_claudechip._tcp.local."
-REFRESH_S = 20  # how often to check whether the Mac's address changed
-
-
-def lan_ip() -> str | None:
-    """IP of the interface used for the default route (no packet is sent),
-    or None while the Mac has no network (e.g. just woke up or moved)."""
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        try:
-            s.connect(("192.0.2.1", 9))
-            ip = s.getsockname()[0]
-        except OSError:
-            return None
-    return None if ip.startswith("127.") or ip == "0.0.0.0" else ip
+SERVICE_TYPE = "_claudechip._tcp"
+RESTART_S = 5  # if dns-sd exits, start it again after this long
 
 
 class Advertiser:
@@ -32,52 +23,34 @@ class Advertiser:
         self.cfg = cfg
         # Unique per machine: several Macs may share an account
         host = socket.gethostname().split(".")[0].lower()
-        self.name = f"{cfg.account.lower()}-{host}.{SERVICE_TYPE}"
-        self._zc: AsyncZeroconf | None = None
-        self._info: ServiceInfo | None = None
-        self._ip: str | None = None
+        self.name = f"{cfg.account.lower()}-{host}"
+        self._proc: Optional[asyncio.subprocess.Process] = None
+        self._task: Optional[asyncio.Task] = None
+        self._stopping = False
 
-    def _service(self, ip: str) -> ServiceInfo:
-        return ServiceInfo(
-            SERVICE_TYPE,
-            self.name,
-            addresses=[socket.inet_aton(ip)],
-            port=self.cfg.port,
-            properties={"account": self.cfg.account, "version": __version__},
-            server=f"{socket.gethostname().split('.')[0]}.local.",
+    async def _spawn(self) -> None:
+        self._proc = await asyncio.create_subprocess_exec(
+            "dns-sd", "-R", self.name, SERVICE_TYPE, "local", str(self.cfg.port),
+            f"account={self.cfg.account}", f"version={__version__}",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
         )
 
     async def start(self) -> None:
-        # All interfaces: restricting zeroconf to the LAN address stopped the
-        # device from finding the bridge.
-        self._zc = AsyncZeroconf()
-        await self.refresh()
+        await self._spawn()
+        self._task = asyncio.ensure_future(self._keep_alive())
 
-    async def refresh(self) -> None:
-        """Follow the Mac's address: announce once it has one and update the
-        announcement when it changes (wake from sleep, another network).
-        Never announces 127.0.0.1."""
-        ip = lan_ip()
-        if ip is None or ip == self._ip:
-            return
-        info = self._service(ip)
-        if self._info is None:
-            await self._zc.async_register_service(info, allow_name_change=True)
-            self.name = info.name
-        else:
-            await self._zc.async_update_service(info)
-        self._info, self._ip = info, ip
-
-    async def watch(self) -> None:
-        while True:
-            await asyncio.sleep(REFRESH_S)
-            try:
-                await self.refresh()
-            except Exception:  # keep trying on the next round
-                pass
+    async def _keep_alive(self) -> None:
+        while not self._stopping:
+            await self._proc.wait()
+            if self._stopping:
+                return
+            await asyncio.sleep(RESTART_S)
+            await self._spawn()
 
     async def stop(self) -> None:
-        if self._zc:
-            if self._info:
-                await self._zc.async_unregister_service(self._info)
-            await self._zc.async_close()
+        self._stopping = True
+        if self._task:
+            self._task.cancel()
+        if self._proc and self._proc.returncode is None:
+            self._proc.terminate()
+            await self._proc.wait()

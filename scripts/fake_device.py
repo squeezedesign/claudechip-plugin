@@ -1,9 +1,11 @@
 """Fake Claude Chip: speaks the device protocol and prints what it receives.
 
-  uv run python scripts/fake_device.py [--port 8765] [--answer allow|deny|ask|none]
+  uv run --with aiohttp python scripts/fake_device.py [--port 8765] [--answer allow|deny|ask|none]
+
+(aiohttp is only needed for this test script, not for the bridge.)
 
 The first run asks to pair: run 'claudechip-bridge pair <code>' with the code
-it prints. The token is kept in scripts/.fake_device_token (git-ignored).
+it prints (python3 -m claudechip_bridge pair <code>). The token is kept in scripts/.fake_device_token (git-ignored).
 
 --answer controls permission requests: ask (prompt here, default),
 allow / deny (automatic) or none (never answer).

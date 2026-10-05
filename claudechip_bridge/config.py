@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import re
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
+
+try:  # Python 3.11+
+    import tomllib
+except ImportError:  # the system python3 on macOS is 3.9
+    tomllib = None
 
 BRIDGE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = BRIDGE_DIR / "config.toml"
@@ -29,15 +34,48 @@ class Config:
         return f"http://127.0.0.1:{self.port}/hook/"
 
 
-def load(path: Path | None = None) -> Config:
+def parse_simple_toml(text: str) -> dict:
+    """The subset of TOML the config uses: key = "string" | integer | bool,
+    and comments. Enough for Python 3.9, which has no tomllib."""
+    result = {}
+    for number, raw in enumerate(text.splitlines(), 1):
+        line, in_string = "", False
+        for ch in raw:  # strip comments outside strings ("#D7DF23" is a value)
+            if ch == '"':
+                in_string = not in_string
+            elif ch == "#" and not in_string:
+                break
+            line += ch
+        line = line.strip()
+        if not line:
+            continue
+        key, sep, value = (part.strip() for part in line.partition("="))
+        if not sep or not key:
+            raise SystemExit(f"config line {number}: expected key = value")
+        if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+            result[key] = value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+        elif value in ("true", "false"):
+            result[key] = value == "true"
+        else:
+            try:
+                result[key] = int(value)
+            except ValueError:
+                raise SystemExit(f"config line {number}: unsupported value {value!r}") from None
+    return result
+
+
+def load(path: Optional[Path] = None) -> Config:
     path = path or DEFAULT_CONFIG
     if not path.exists():
         raise SystemExit(
             f"config not found: {path}\n"
             f"copy {BRIDGE_DIR / 'config.example.toml'} to {DEFAULT_CONFIG} and edit it"
         )
-    with path.open("rb") as f:
-        raw = tomllib.load(f)
+    if tomllib:
+        with path.open("rb") as f:
+            raw = tomllib.load(f)
+    else:
+        raw = parse_simple_toml(path.read_text())
 
     known = set(Config.__dataclass_fields__)
     unknown = set(raw) - known

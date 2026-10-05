@@ -1,6 +1,6 @@
 """Bridge server.
 
-One aiohttp app on a single port:
+One small asyncio server on a single port (standard library only):
   GET  /ws            WebSocket for the Claude Chip device (LAN), paired and signed
   POST /pair, /revoke pairing commands from this Mac (loopback only)
   POST /hook/{event}  Claude Code HTTP hooks (loopback only)
@@ -16,11 +16,15 @@ import logging
 import hmac
 import os
 import secrets
+import signal
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
-from aiohttp import WSMsgType, web
+from .http import Request, Response
+from .http import start as start_http
+from .websocket import WebSocket, is_upgrade
 
 from . import describe
 from .config import Config
@@ -43,7 +47,7 @@ USAGE_FRESH_S = 600          # while direct reads work, ignore the status line
 @dataclass
 class _Conn:
     """One device WebSocket."""
-    ws: web.WebSocketResponse
+    ws: WebSocket
     peer: str
     nonce: str              # random per connection: part of every signature
     device_id: str = ""
@@ -56,12 +60,12 @@ class Bridge:
         self.cfg = cfg
         self.bridge_id = bridge_id()
         self.paired = Devices()
-        self.conns: dict[web.WebSocketResponse, _Conn] = {}
+        self.conns: dict[WebSocket, _Conn] = {}
         # Pending pairings: code -> (connection, expiry), None if ambiguous
         self.pairing: dict[str, tuple[_Conn, float] | None] = {}
         self.sessions = SessionStore()
         self.perms = Permissions()
-        self.devices: set[web.WebSocketResponse] = set()
+        self.devices: set[WebSocket] = set()
         # Plan usage from the status line: {"five_hour": (pct, resets_at), ...}
         self.usage: dict[str, tuple[float, float]] = {}
         # Claude Code process of each session, sent by the hooks as X-Claude-Pid
@@ -69,14 +73,29 @@ class Bridge:
         self._direct_usage_at = 0.0  # last successful direct usage read
         self._state_task: asyncio.Task | None = None
 
-        self.app = web.Application()
-        self.app.add_routes([
-            web.get("/ws", self.handle_ws),
-            web.post("/hook/{event}", self.handle_hook),
-            web.post("/statusline", self.handle_statusline),
-            web.post("/pair", self.handle_pair),
-            web.post("/revoke", self.handle_revoke),
-        ])
+    # ------------------------------------------------------------------
+    # Routing
+    # ------------------------------------------------------------------
+
+    async def handle(self, req: Request) -> Optional[Response]:
+        """GET /ws for the device (LAN); everything else only from this Mac."""
+        if req.path == "/ws" and req.method == "GET" and is_upgrade(req):
+            await self.handle_ws(req)
+            return None
+        if req.method != "POST":
+            return Response(404)
+        if req.remote not in LOOPBACK:
+            return Response(403)
+        try:
+            data = req.json()
+        except ValueError:
+            return Response(400)
+        if req.path.startswith("/hook/"):
+            return await self.handle_hook(req, req.path[len("/hook/"):], data)
+        routes = {"/statusline": self.handle_statusline, "/pair": self.handle_pair,
+                  "/revoke": self.handle_revoke}
+        handler = routes.get(req.path)
+        return await handler(data) if handler else Response(404)
 
     # ------------------------------------------------------------------
     # Messages to the device
@@ -147,31 +166,35 @@ class Bridge:
     # Device WebSocket: pairing and authentication (SPEC §7.3)
     # ------------------------------------------------------------------
 
-    async def handle_ws(self, request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse(heartbeat=20)
-        await ws.prepare(request)
+    async def handle_ws(self, request: Request) -> None:
+        ws = await WebSocket.accept(request)
+        heartbeat = asyncio.ensure_future(ws.heartbeat())  # notices a device that vanished
         conn = _Conn(ws=ws, peer=request.remote or "?", nonce=secrets.token_hex(16))
-        # Who we are, before any authentication: nothing secret in here
-        await ws.send_json({**self.hello_msg(), "nonce": conn.nonce})
         try:
-            async for msg in ws:
-                if msg.type != WSMsgType.TEXT:
-                    continue
+            # Who we are, before any authentication: nothing secret in here
+            await ws.send_json({**self.hello_msg(), "nonce": conn.nonce})
+            while True:
+                text = await ws.recv()
+                if text is None:
+                    break
                 try:
-                    data = json.loads(msg.data)
+                    data = json.loads(text)
                 except ValueError:
                     continue
                 if conn.token:
                     await self._on_signed(conn, data)
                 else:
                     await self._on_unauthenticated(conn, data)
+        except ConnectionError:
+            pass
         finally:
+            heartbeat.cancel()
+            await ws.close()
             self.devices.discard(ws)
             self.conns.pop(ws, None)
             for code in [c for c, entry in self.pairing.items() if entry and entry[0] is conn]:
                 del self.pairing[code]
             log.info("device %s disconnected", conn.device_id or conn.peer)
-        return ws
 
     async def _on_unauthenticated(self, conn: "_Conn", data: dict) -> None:
         kind = data.get("type")
@@ -203,7 +226,7 @@ class Bridge:
             # Two devices showing the same code: refuse both rather than guess
             self.pairing[code] = None if existing and existing[0] is not conn else (conn, time.time() + PAIR_TTL_S)
             # The code is not logged on purpose: it must be read on the device itself
-            log.info("device %s asks to pair: run 'claudechip-bridge pair <code on its screen>'", device_id)
+            log.info("device %s asks to pair: run 'python3 -m claudechip_bridge pair <code on its screen>'", device_id)
 
     async def _on_signed(self, conn: "_Conn", data: dict) -> None:
         """After authentication every message is {"seq", "msg", "sig"}: sig is the
@@ -223,37 +246,33 @@ class Bridge:
         except ValueError:
             pass
 
-    async def handle_pair(self, request: web.Request) -> web.Response:
+    async def handle_pair(self, data: dict) -> Response:
         """POST /pair {"code"}: from 'claudechip-bridge pair <code>' on this Mac."""
-        if request.remote not in LOOPBACK:
-            raise web.HTTPForbidden()
-        code = str((await request.json()).get("code", "")).replace(" ", "")
+        code = str(data.get("code", "")).replace(" ", "")
         now = time.time()
         for c in [c for c, e in self.pairing.items() if e and e[1] < now]:
             del self.pairing[c]
         if code not in self.pairing:
-            return web.json_response({"ok": False, "error": "no device is showing that code (or it expired)"})
+            return Response.json({"ok": False, "error": "no device is showing that code (or it expired)"})
         entry = self.pairing.pop(code)
         if entry is None:
-            return web.json_response({"ok": False, "error": "two devices showed that code; start again"})
+            return Response.json({"ok": False, "error": "two devices showed that code; start again"})
         conn = entry[0]
         token = self.paired.pair(conn.device_id)
         await conn.ws.send_json({"type": "paired", "token": token})
         log.info("device %s paired", conn.device_id)
-        return web.json_response({"ok": True, "device": conn.device_id})
+        return Response.json({"ok": True, "device": conn.device_id})
 
-    async def handle_revoke(self, request: web.Request) -> web.Response:
+    async def handle_revoke(self, data: dict) -> Response:
         """POST /revoke {"device"}: forget a device and drop its connection."""
-        if request.remote not in LOOPBACK:
-            raise web.HTTPForbidden()
-        full = self.paired.revoke(str((await request.json()).get("device", "")))
+        full = self.paired.revoke(str(data.get("device", "")))
         if not full:
-            return web.json_response({"ok": False, "error": "no single device matches that id"})
+            return Response.json({"ok": False, "error": "no single device matches that id"})
         for conn in [c for c in self.conns.values() if c.device_id == full]:
             await conn.ws.send_json({"type": "revoked"})
-            await conn.ws.close(code=4401, message=b"revoked")
+            await conn.ws.close(4401, b"revoked")
         log.info("device %s revoked", full)
-        return web.json_response({"ok": True, "device": full})
+        return Response.json({"ok": True, "device": full})
 
     async def on_device_message(self, data: dict) -> None:
         kind = data.get("type")
@@ -273,26 +292,22 @@ class Bridge:
     # Claude Code hooks
     # ------------------------------------------------------------------
 
-    async def handle_hook(self, request: web.Request) -> web.Response:
-        if request.remote not in LOOPBACK:
-            raise web.HTTPForbidden()
-        event = request.match_info["event"]
-        try:
-            data = await request.json()
-        except ValueError:
-            raise web.HTTPBadRequest()
-        pid = request.headers.get("X-Claude-Pid", "")
+    async def handle_hook(self, request: Request, event: str, data: dict) -> Response:
+        pid = request.headers.get("x-claude-pid", "")
         if pid.isdigit() and data.get("session_id"):
             self.pids[data["session_id"]] = int(pid)
-        project = request.headers.get("X-Claude-Project", "")
+        project = request.headers.get("x-claude-project", "")
         if project:
             data["project_dir"] = project
 
         handler = getattr(self, f"on_{event}", None)
         if handler is None:
-            return web.Response()  # empty 2xx: no decision, nothing to do
-        result = await handler(data)
-        return web.json_response(result) if result else web.Response()
+            return Response()  # empty 2xx: no decision, nothing to do
+        if event == "PermissionRequest":
+            result = await handler(data, request)
+        else:
+            result = await handler(data)
+        return Response.json(result) if result else Response()
 
     def _session(self, data: dict):
         session_id = data.get("session_id", "?")
@@ -422,7 +437,7 @@ class Bridge:
 
     on_PostToolUseFailure = on_PostToolUse
 
-    async def on_PermissionRequest(self, data: dict) -> dict | None:
+    async def on_PermissionRequest(self, data: dict, request: Request) -> Optional[dict]:
         s = self._session(data)
         text = describe.permission_question(data.get("tool_name", ""), data.get("tool_input") or {})
         p = self.perms.create(s.id, data.get("tool_use_id", ""), text)
@@ -431,12 +446,15 @@ class Bridge:
         await self.flush_state()
         await self.broadcast(p.to_json())
 
-        try:
-            allow = await p.future  # no timeout: device or terminal, first one wins
-        except asyncio.CancelledError:
-            # Claude Code dropped the hook (session closed or hook killed)
+        # No timeout: device or terminal, first one wins. If Claude Code drops the
+        # hook (session closed, hook killed) the connection closes.
+        gone = asyncio.ensure_future(request.wait_disconnect())
+        done, _ = await asyncio.wait({p.future, gone}, return_when=asyncio.FIRST_COMPLETED)
+        gone.cancel()
+        if p.future not in done:
             await self._cancel_permission(p)
-            raise
+            return None
+        allow = p.future.result()
         if allow is None:
             return None  # answered in the terminal: release the hook silently
 
@@ -514,13 +532,7 @@ class Bridge:
     # Status line: context window and plan usage
     # ------------------------------------------------------------------
 
-    async def handle_statusline(self, request: web.Request) -> web.Response:
-        if request.remote not in LOOPBACK:
-            raise web.HTTPForbidden()
-        try:
-            data = await request.json()
-        except ValueError:
-            raise web.HTTPBadRequest()
+    async def handle_statusline(self, data: dict) -> Response:
 
         changed = False
         direct_fresh = time.time() - self._direct_usage_at < USAGE_FRESH_S
@@ -546,7 +558,7 @@ class Bridge:
 
         if changed:
             self.schedule_state()
-        return web.Response()
+        return Response()
 
 
 def _alive(pid: int) -> bool:
@@ -564,15 +576,9 @@ async def serve(cfg: Config) -> None:
 
     bridge = Bridge(cfg)
     bridge.load_sessions()
-    # handler_cancellation: when Claude Code drops a pending PermissionRequest
-    # (answered in the terminal), the handler is cancelled and we can tell the device.
-    runner = web.AppRunner(bridge.app, handler_cancellation=True, access_log=None)
-    await runner.setup()
-    site = web.TCPSite(runner, host="0.0.0.0", port=cfg.port)
     try:
-        await site.start()
+        server = await start_http(bridge.handle, "0.0.0.0", cfg.port)
     except OSError as e:
-        await runner.cleanup()
         if e.errno == errno.EADDRINUSE:
             raise SystemExit(
                 f"port {cfg.port} is already in use: is another bridge running?\n"
@@ -582,16 +588,21 @@ async def serve(cfg: Config) -> None:
 
     advertiser = Advertiser(cfg)
     await advertiser.start()
-    liveness = asyncio.create_task(bridge.watch_liveness())
-    usage_poll = asyncio.create_task(bridge.poll_usage()) if cfg.usage_source == "auto" else None
-    announce = asyncio.create_task(advertiser.watch())
+    tasks = [asyncio.ensure_future(bridge.watch_liveness())]
+    if cfg.usage_source == "auto":
+        tasks.append(asyncio.ensure_future(bridge.poll_usage()))
     log.info("bridge %s listening on port %d (mDNS %s)", cfg.account, cfg.port, advertiser.name)
+    # Stop cleanly on kill / logout too, not only Ctrl+C: dns-sd must not
+    # keep announcing a bridge that is gone
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
     try:
-        await asyncio.Event().wait()
+        await stop.wait()
+        log.info("bridge stopping")
     finally:
-        liveness.cancel()
-        announce.cancel()
-        if usage_poll:
-            usage_poll.cancel()
+        for task in tasks:
+            task.cancel()
         await advertiser.stop()
-        await runner.cleanup()
+        server.close()

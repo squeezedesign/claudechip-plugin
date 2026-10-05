@@ -9,26 +9,28 @@ mDNS as `_claudechip._tcp`).
 
 ## Setup
 
+No dependencies: it runs with the `python3` that ships with macOS (3.9+) and
+announces itself with macOS's `dns-sd`.
+
 ```sh
-brew install uv
 git clone https://github.com/<owner>/claudechip-plugin && cd claudechip-plugin
-cp config.example.toml config.toml   # set account, mac and color
-uv sync
-uv run claudechip-bridge install     # hooks + status line in ~/.claude (backup first)
-uv run claudechip-bridge             # run it (Ctrl+C to stop)
+cp config.example.toml config.toml        # set account, mac and color
+python3 -m claudechip_bridge install      # hooks + status line in ~/.claude (backup first)
+python3 -m claudechip_bridge              # run it (Ctrl+C to stop)
 ```
 
-`uv run claudechip-bridge uninstall` removes the hooks, restores the previous
-status line and removes the `[DECK]` rule from `~/.claude/CLAUDE.md`.
+`python3 -m claudechip_bridge uninstall` removes the hooks, restores the
+previous status line and removes the `[DECK]` rule from `~/.claude/CLAUDE.md`.
+(`uv run claudechip-bridge …` works too.)
 
 ## Pairing
 
 The first time, the device shows a 6-digit code. On the Mac:
 
 ```sh
-uv run claudechip-bridge pair 482913   # the code on the device screen
-uv run claudechip-bridge devices       # list paired devices
-uv run claudechip-bridge revoke <id>   # forget one (id or prefix)
+python3 -m claudechip_bridge pair 482913   # the code on the device screen
+python3 -m claudechip_bridge devices       # list paired devices
+python3 -m claudechip_bridge revoke <id>   # forget one (id or prefix)
 ```
 
 Each device gets its own token, sent only once in the pairing reply and kept
@@ -50,7 +52,7 @@ it on the device itself.
 - **Usage**: with `usage_source = "auto"` the bridge reads plan usage straight
   from Anthropic every 2 minutes, with the Claude Code login from the Keychain
   (the same data as `/usage`; undocumented endpoint). Check it with
-  `uv run claudechip-bridge usage-check`. Otherwise, or if that fails, the status line wrapper forwards `context_window.used_percentage`
+  `python3 -m claudechip_bridge usage-check`. Otherwise, or if that fails, the status line wrapper forwards `context_window.used_percentage`
   (CTX) and `rate_limits.five_hour` / `seven_day` (SES / SEM, Pro and Max plans)
   and then runs the previous status line command.
 - **Summaries**: `deck_line` takes the `[DECK] …` line that the rule in
@@ -59,7 +61,7 @@ it on the device itself.
 ## Testing without the device
 
 ```sh
-uv run python scripts/fake_device.py --answer ask   # pairs on first run
+uv run --with aiohttp python scripts/fake_device.py --answer ask   # pairs on first run
 ```
 
 ## Protocol (JSON over WebSocket)

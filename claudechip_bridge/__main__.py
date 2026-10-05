@@ -1,6 +1,6 @@
 """Command line entry point.
 
-  uv run claudechip-bridge             run the bridge
+  python3 -m claudechip_bridge         run the bridge (or: uv run claudechip-bridge)
   uv run claudechip-bridge install     add hooks + status line to ~/.claude
   uv run claudechip-bridge uninstall   remove them
   uv run claudechip-bridge usage-check check that plan usage can be read directly
@@ -71,9 +71,6 @@ def main() -> None:
             pass
 
 
-if __name__ == "__main__":
-    main()
-
 
 def _local_command(cfg, command: str, arg: str | None) -> None:
     """pair / revoke talk to the running bridge on this Mac."""
@@ -89,7 +86,11 @@ def _local_command(cfg, command: str, arg: str | None) -> None:
         with urllib.request.urlopen(req, timeout=5) as resp:
             answer = json.loads(resp.read())
     except urllib.error.URLError:
-        raise SystemExit("the bridge is not running: start it with 'uv run claudechip-bridge'")
+        raise SystemExit("the bridge is not running: start it with 'python3 -m claudechip_bridge'")
     if not answer.get("ok"):
         raise SystemExit(f"{command} failed: {answer.get('error')}")
     print(f"{'paired' if command == 'pair' else 'revoked'}: {answer['device']}")
+
+
+if __name__ == "__main__":
+    main()
