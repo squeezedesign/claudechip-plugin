@@ -1,0 +1,16 @@
+# Claude Chip bridge configuration (one per Mac).
+# Copy to config.toml (git-ignored) and adjust.
+
+account = "SQUEEZE"          # shown on the device, uppercase
+mac = "MAC CASA"             # shown under the account in the selector
+color = "#D7DF23"            # account color: tab underline and status bar name
+port = 8765                  # WebSocket for the device + local HTTP for hooks
+
+# Summary method for each finished answer: "deck_line" or "truncate".
+# deck_line reads the "[DECK] ..." line that ~/.claude/CLAUDE.md asks for and
+# falls back to truncate when it is missing.
+summary = "deck_line"
+
+# Temporary shared secret until pairing exists (phase 4). Must match
+# BRIDGE_TOKEN in the firmware's secrets.h.
+dev_token = "change-me"
