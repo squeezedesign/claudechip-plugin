@@ -30,7 +30,10 @@ status line and removes the `[DECK]` rule from `~/.claude/CLAUDE.md`.
   the terminal. A device answer is returned as `allow`/`deny`. A terminal answer
   is inferred from the next event of the session, and the request is withdrawn
   from the device.
-- **Usage**: the status line wrapper forwards `context_window.used_percentage`
+- **Usage**: with `usage_source = "auto"` the bridge reads plan usage straight
+  from Anthropic every 2 minutes, with the Claude Code login from the Keychain
+  (the same data as `/usage`; undocumented endpoint). Check it with
+  `uv run claudechip-bridge usage-check`. Otherwise, or if that fails, the status line wrapper forwards `context_window.used_percentage`
   (CTX) and `rate_limits.five_hour` / `seven_day` (SES / SEM, Pro and Max plans)
   and then runs the previous status line command.
 - **Summaries**: `deck_line` takes the `[DECK] …` line that the rule in

@@ -31,6 +31,8 @@ STATE_DEBOUNCE_S = 0.2  # coalesce bursts of hook events into one state message
 AUTH_TIMEOUT_S = 5
 LIVENESS_EVERY_S = 15   # how often to check that session processes are alive
 STATE_FILE = Path.home() / ".config" / "claudechip" / "sessions.json"
+USAGE_POLL_S = 120           # direct usage reads (usage_source = "auto")
+USAGE_FRESH_S = 600          # while direct reads work, ignore the status line
 
 
 class Bridge:
@@ -43,6 +45,7 @@ class Bridge:
         self.usage: dict[str, tuple[float, float]] = {}
         # Claude Code process of each session, sent by the hooks as X-Claude-Pid
         self.pids: dict[str, int] = {}
+        self._direct_usage_at = 0.0  # last successful direct usage read
         self._state_task: asyncio.Task | None = None
 
         self.app = web.Application()
@@ -255,6 +258,27 @@ class Bridge:
             log.info("restored %d session(s): %s", len(self.sessions.all()),
                      ", ".join(s.name for s in self.sessions.all()))
 
+    async def poll_usage(self) -> None:
+        """Read plan usage straight from Anthropic every few minutes."""
+        from . import oauth_usage
+
+        warned = False
+        while True:
+            try:
+                login = await asyncio.to_thread(oauth_usage.read_login)
+                usage = await asyncio.to_thread(oauth_usage.fetch_usage, login)
+            except oauth_usage.UsageError as e:
+                if not warned:
+                    log.info("direct usage unavailable (%s); using the status line", e)
+                    warned = True
+            else:
+                warned = False
+                self._direct_usage_at = time.time()
+                if any(self.usage.get(w) != v for w, v in usage.items()):
+                    self.usage.update(usage)
+                    self.schedule_state()
+            await asyncio.sleep(USAGE_POLL_S)
+
     async def watch_liveness(self) -> None:
         """Drop sessions whose Claude Code process is gone without a SessionEnd
         (crash, window reload, killed terminal)."""
@@ -404,6 +428,7 @@ class Bridge:
             raise web.HTTPBadRequest()
 
         changed = False
+        direct_fresh = time.time() - self._direct_usage_at < USAGE_FRESH_S
         session_id = data.get("session_id")
         if session_id:
             ws = data.get("workspace") or {}
@@ -417,6 +442,8 @@ class Bridge:
                 changed = True
 
         for window, info in (data.get("rate_limits") or {}).items():
+            if direct_fresh:
+                break  # the direct reading is authoritative
             if window in ("five_hour", "seven_day") and info.get("used_percentage") is not None:
                 if self._update_usage(window, float(info["used_percentage"]),
                                       float(info.get("resets_at") or 0)):
@@ -461,10 +488,13 @@ async def serve(cfg: Config) -> None:
     advertiser = Advertiser(cfg)
     await advertiser.start()
     liveness = asyncio.create_task(bridge.watch_liveness())
+    usage_poll = asyncio.create_task(bridge.poll_usage()) if cfg.usage_source == "auto" else None
     log.info("bridge %s listening on port %d (mDNS %s)", cfg.account, cfg.port, advertiser.name)
     try:
         await asyncio.Event().wait()
     finally:
         liveness.cancel()
+        if usage_poll:
+            usage_poll.cancel()
         await advertiser.stop()
         await runner.cleanup()

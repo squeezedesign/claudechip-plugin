@@ -11,6 +11,7 @@ BRIDGE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = BRIDGE_DIR / "config.toml"
 
 SUMMARY_METHODS = ("deck_line", "truncate")
+USAGE_SOURCES = ("auto", "statusline")
 
 
 @dataclass
@@ -20,6 +21,7 @@ class Config:
     color: str = "#D7DF23"
     port: int = 8765
     summary: str = "deck_line"
+    usage_source: str = "auto"
     dev_token: str = ""
 
     @property
@@ -49,6 +51,8 @@ def load(path: Path | None = None) -> Config:
         raise SystemExit(f"color must look like #RRGGBB, got {cfg.color!r}")
     if cfg.summary not in SUMMARY_METHODS:
         raise SystemExit(f"summary must be one of {SUMMARY_METHODS}, got {cfg.summary!r}")
+    if cfg.usage_source not in USAGE_SOURCES:
+        raise SystemExit(f"usage_source must be one of {USAGE_SOURCES}, got {cfg.usage_source!r}")
     if not cfg.dev_token or cfg.dev_token == "change-me":
         raise SystemExit("set a dev_token in the config (and the same BRIDGE_TOKEN in the firmware)")
     return cfg

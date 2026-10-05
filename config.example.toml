@@ -11,6 +11,12 @@ port = 8765                  # WebSocket for the device + local HTTP for hooks
 # falls back to truncate when it is missing.
 summary = "deck_line"
 
+# Where SES / SEM come from. "auto" asks Anthropic directly every few minutes
+# using the Claude Code login in the Keychain (undocumented endpoint, falls back
+# to the status line); "statusline" only uses what terminal sessions report.
+# Check it with: uv run claudechip-bridge usage-check
+usage_source = "auto"
+
 # Temporary shared secret until pairing exists (phase 4). Must match
 # BRIDGE_TOKEN in the firmware's secrets.h.
 dev_token = "change-me"
