@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import socket
 
-from zeroconf import ServiceInfo
+from zeroconf import IPVersion, ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
 
 from . import __version__
@@ -42,7 +42,9 @@ class Advertiser:
             properties={"account": self.cfg.account, "version": __version__},
             server=f"{socket.gethostname().split('.')[0]}.local.",
         )
-        self._zc = AsyncZeroconf()
+        # Only the LAN interface: announcing on every interface (VPN tunnels,
+        # inactive adapters) logs "No route to host" errors at startup
+        self._zc = AsyncZeroconf(interfaces=[ip], ip_version=IPVersion.V4Only)
         await self._zc.async_register_service(self._info, allow_name_change=True)
         self.name = self._info.name
 
