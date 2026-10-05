@@ -9,6 +9,7 @@ One aiohttp app on a single port:
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
 import os
@@ -380,7 +381,16 @@ async def serve(cfg: Config) -> None:
     runner = web.AppRunner(bridge.app, handler_cancellation=True, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, host="0.0.0.0", port=cfg.port)
-    await site.start()
+    try:
+        await site.start()
+    except OSError as e:
+        await runner.cleanup()
+        if e.errno == errno.EADDRINUSE:
+            raise SystemExit(
+                f"port {cfg.port} is already in use: is another bridge running?\n"
+                f"find it with: lsof -nP -iTCP:{cfg.port} -sTCP:LISTEN"
+            ) from None
+        raise
 
     advertiser = Advertiser(cfg)
     await advertiser.start()
