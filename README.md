@@ -1,14 +1,17 @@
 # Claude Chip — bridge
 
+Companion for the Claude Chip desk device. It will be packaged as a Claude Code
+plugin (see "Roadmap"); for now it is installed by hand.
+
 Runs on each Mac. Receives Claude Code events through hooks, keeps the state of
 every session and talks to the device over a WebSocket on the LAN (announced by
-mDNS as `_claudechip._tcp`). See `../SPEC.md` §7.
+mDNS as `_claudechip._tcp`).
 
 ## Setup
 
 ```sh
 brew install uv
-cd bridge
+git clone https://github.com/<owner>/claudechip-plugin && cd claudechip-plugin
 cp config.example.toml config.toml   # set account, mac, color, dev_token
 uv sync
 uv run claudechip-bridge install     # hooks + status line in ~/.claude (backup first)
@@ -38,3 +41,21 @@ status line and removes the `[DECK]` rule from `~/.claude/CLAUDE.md`.
 ```sh
 uv run python scripts/fake_device.py --token <dev_token> --answer ask
 ```
+
+## Protocol (JSON over WebSocket)
+
+Bridge → device: `hello` (account, mac, color), `state` (usage + sessions),
+`permission`, `permission_cancel`, `summary`. Device → bridge: `hello` with the
+token, `decision`. Every device message carries the token.
+
+## Security
+
+The bridge only listens on the local network and rejects messages without a
+valid token. Never expose it to the internet.
+
+## Roadmap
+
+- Pairing with a 6-digit code shown on the device (replaces `dev_token`).
+- Packaging as a Claude Code plugin: hooks bundled, `userConfig` for account /
+  Mac / color, `[DECK]` rule injected at session start, bridge started in the
+  background, `/claudechip:pair <code>`.
