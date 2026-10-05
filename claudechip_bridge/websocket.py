@@ -13,7 +13,7 @@ import struct
 import time
 from typing import Optional
 
-from .http import Request
+from .httpserver import Request
 
 _GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_MESSAGE = 64 * 1024
