@@ -489,11 +489,13 @@ async def serve(cfg: Config) -> None:
     await advertiser.start()
     liveness = asyncio.create_task(bridge.watch_liveness())
     usage_poll = asyncio.create_task(bridge.poll_usage()) if cfg.usage_source == "auto" else None
+    announce = asyncio.create_task(advertiser.watch())
     log.info("bridge %s listening on port %d (mDNS %s)", cfg.account, cfg.port, advertiser.name)
     try:
         await asyncio.Event().wait()
     finally:
         liveness.cancel()
+        announce.cancel()
         if usage_poll:
             usage_poll.cancel()
         await advertiser.stop()
