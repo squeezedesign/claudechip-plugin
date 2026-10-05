@@ -52,6 +52,11 @@ def main() -> None:
     # without a route (VPN tunnels, inactive adapters); keep the output clean
     logging.getLogger("zeroconf").setLevel(logging.CRITICAL)
     config_path = args.config
+    if (args.command == "status" and config_path is None and not config.DEFAULT_CONFIG.exists()
+            and not config.plugin_config_path().exists()):
+        # Plugin installed but no session has started since: nothing is wrong
+        print("the bridge has not started yet: it starts with the next Claude Code session")
+        return
     cfg = config.load(config_path)
 
     if args.command in ("pair", "revoke"):
