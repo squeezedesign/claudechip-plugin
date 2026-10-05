@@ -1,0 +1,68 @@
+{
+  "name": "claudechip",
+  "displayName": "Claude Chip",
+  "version": "0.2.0",
+  "description": "Connects Claude Code to the Claude Chip desk device: session status, short summaries and approve/deny keys.",
+  "author": {
+    "name": "Squeeze Design",
+    "email": "info@squeezedesign.es",
+    "url": "https://squeezedesign.es"
+  },
+  "homepage": "https://squeezedesign.es",
+  "repository": "https://github.com/squeezedesign/claudechip-plugin",
+  "license": "SEE LICENSE IN LICENSE",
+  "keywords": [
+    "esp32",
+    "hardware",
+    "notifications",
+    "permissions"
+  ],
+  "userConfig": {
+    "account": {
+      "type": "string",
+      "title": "Account name",
+      "description": "Shown on the device, e.g. SQUEEZE (personal) or EGLUU (work). Macs with the same name are grouped.",
+      "default": "CLAUDE"
+    },
+    "mac_name": {
+      "type": "string",
+      "title": "This Mac's name",
+      "description": "Shown under the account in the device's selector. Empty: the computer name.",
+      "default": ""
+    },
+    "color": {
+      "type": "string",
+      "title": "Account color",
+      "description": "Hex color for the account's tabs and name, e.g. #D7DF23.",
+      "default": "#D7DF23"
+    },
+    "summary": {
+      "type": "string",
+      "title": "Summaries",
+      "description": "deck_line: Claude ends each answer with a [DECK] line for the device. truncate: first sentence of the answer.",
+      "options": [
+        "deck_line",
+        "truncate"
+      ],
+      "default": "deck_line"
+    },
+    "usage_source": {
+      "type": "string",
+      "title": "Plan usage (SES / SEM)",
+      "description": "auto: read it from Anthropic with your Claude Code login (macOS asks once for Keychain access). statusline: only what terminal sessions report.",
+      "options": [
+        "auto",
+        "statusline"
+      ],
+      "default": "auto"
+    },
+    "port": {
+      "type": "number",
+      "title": "Port",
+      "description": "Local port of the bridge.",
+      "default": 8765,
+      "min": 1024,
+      "max": 65535
+    }
+  }
+}

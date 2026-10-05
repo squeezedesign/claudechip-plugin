@@ -1,6 +1,6 @@
 [project]
 name = "claudechip-bridge"
-version = "0.1.0"
+version = "0.2.0"
 description = "Bridge between Claude Code on a Mac and the Claude Chip desk device"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }

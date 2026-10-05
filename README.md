@@ -1,68 +1,88 @@
-# Claude Chip — bridge
+# Claude Chip — Claude Code plugin
 
-Companion for the Claude Chip desk device. It will be packaged as a Claude Code
-plugin (see "Roadmap"); for now it is installed by hand.
+Connects Claude Code to the **Claude Chip** desk device: it shows what each
+session is doing, short summaries of every answer, and lets you approve or
+deny permission requests with physical keys.
 
-Runs on each Mac. Receives Claude Code events through hooks, keeps the state of
-every session and talks to the device over a WebSocket on the LAN (announced by
-mDNS as `_claudechip._tcp`).
+It runs a small bridge on your Mac (one per Mac) that receives Claude Code
+events through hooks and talks to the device over the local network. No
+dependencies: it uses the `python3` that ships with macOS and macOS's
+`dns-sd`. macOS only for now.
 
-## Setup
-
-No dependencies: it runs with the `python3` that ships with macOS (3.9+) and
-announces itself with macOS's `dns-sd`.
-
-```sh
-git clone https://github.com/<owner>/claudechip-plugin && cd claudechip-plugin
-cp config.example.toml config.toml        # set account, mac and color
-python3 -m claudechip_bridge install      # hooks + status line in ~/.claude (backup first)
-python3 -m claudechip_bridge              # run it (Ctrl+C to stop)
-```
-
-`python3 -m claudechip_bridge uninstall` removes the hooks, restores the
-previous status line and removes the `[DECK]` rule from `~/.claude/CLAUDE.md`.
-(`uv run claudechip-bridge …` works too.)
-
-## Pairing
-
-The first time, the device shows a 6-digit code. On the Mac:
+## Install
 
 ```sh
-python3 -m claudechip_bridge pair 482913   # the code on the device screen
-python3 -m claudechip_bridge devices       # list paired devices
-python3 -m claudechip_bridge revoke <id>   # forget one (id or prefix)
+claude plugin marketplace add squeezedesign/claudechip-plugin
+claude plugin install claudechip@claudechip
 ```
 
-Each device gets its own token, sent only once in the pairing reply and kept
-in `~/.config/claudechip/devices.json` and in the device. Afterwards both
-sides prove they know it with HMAC-SHA256 over a random per-connection nonce,
-and every device message is signed with a growing counter, so captured
-messages cannot be forged or replayed. The bridge never logs the code: read
-it on the device itself.
+Then, in Claude Code, open `/plugin`, choose **claudechip** and set its options:
+
+| Option | What it is |
+|---|---|
+| Account name | Shown on the device, e.g. `SQUEEZE` or `EGLUU`. Macs with the same name are grouped |
+| This Mac's name | Shown under the account in the device's selector (empty: the computer name) |
+| Account color | Hex color of the account's tabs and name, e.g. `#D7DF23` |
+| Summaries | `deck_line` (Claude ends each answer with a `[DECK]` line) or `truncate` |
+| Plan usage | `auto` (read from Anthropic with your Claude Code login; macOS asks once for Keychain access) or `statusline` |
+| Port | Local port of the bridge (default 8765) |
+
+Start a new Claude Code session: the bridge starts by itself in the background
+and the device finds it on the network.
+
+## Commands
+
+| Command | |
+|---|---|
+| `/claudechip:pair 482913` | Pair the device showing that code (first time, or from ⚙ AJUSTES → EMPAREJAR) |
+| `/claudechip:status` | Is the bridge running, is the device connected |
+| `/claudechip:devices` | Paired devices; `/claudechip:devices revoke <id>` forgets one |
+| `/claudechip:setup` | Wrap your status line so terminal sessions report plan usage and context (`remove` to undo). Also cleans up a manual install |
 
 ## How it works
 
-- **Hooks** (`~/.claude/settings.json`): every event is piped to
-  `http://127.0.0.1:<port>/hook/<Event>` with `curl … || true`, async, so Claude
-  Code is never slowed down and stays silent when the bridge is not running.
-- **Permissions**: `PermissionRequest` waits, with no timeout, for the device or
-  the terminal. A device answer is returned as `allow`/`deny`. A terminal answer
-  is inferred from the next event of the session, and the request is withdrawn
-  from the device.
-- **Usage**: with `usage_source = "auto"` the bridge reads plan usage straight
-  from Anthropic every 2 minutes, with the Claude Code login from the Keychain
-  (the same data as `/usage`; undocumented endpoint). Check it with
-  `python3 -m claudechip_bridge usage-check`. Otherwise, or if that fails, the status line wrapper forwards `context_window.used_percentage`
-  (CTX) and `rate_limits.five_hour` / `seven_day` (SES / SEM, Pro and Max plans)
-  and then runs the previous status line command.
-- **Summaries**: `deck_line` takes the `[DECK] …` line that the rule in
-  `~/.claude/CLAUDE.md` asks for; `truncate` uses the first sentence.
+- **Hooks** forward every Claude Code event to the bridge on `127.0.0.1`. They
+  run async and stay silent when the bridge is not running, so Claude Code is
+  never slowed down or interrupted.
+- **Permissions** wait, with no timeout, for the device or the terminal: the
+  first answer wins. A device answer comes back as allow / deny; a terminal
+  answer is noticed and the request is withdrawn from the device.
+- **Questions and plan approvals** cannot be answered from the device (Claude
+  Code offers no hook for them): the device beeps and asks you to answer in
+  the console.
+- **Summaries**: with `deck_line`, a short rule added at session start asks
+  Claude to end each answer with `[DECK] …`; otherwise the first sentence.
+- **Usage**: plan usage (SES / SEM) straight from Anthropic every 5 minutes,
+  or from the status line; context (CTX) from each session's transcript.
+- **State** lives in `~/.config/claudechip/`: paired devices, sessions,
+  `bridge.log`.
 
-## Testing without the device
+## Pairing and security
+
+The first time, the device shows a 6-digit code: type `/claudechip:pair <code>`.
+Each device gets its own token, sent only once and kept in
+`~/.config/claudechip/devices.json` and in the device. Afterwards both sides
+prove they know it with HMAC-SHA256 over a random per-connection nonce, and
+every device message is signed with a growing counter, so captured messages
+cannot be forged or replayed. The bridge never logs the code: read it on the
+device itself.
+
+The bridge only listens on the local network and accepts only paired devices
+and signed messages. Never expose it to the internet.
+
+## Manual install (without the plugin)
 
 ```sh
-uv run --with aiohttp python scripts/fake_device.py --answer ask   # pairs on first run
+git clone https://github.com/squeezedesign/claudechip-plugin && cd claudechip-plugin
+cp config.example.toml config.toml        # account, mac, color
+/usr/bin/python3 -m claudechip_bridge install     # hooks + status line in ~/.claude
+/usr/bin/python3 -m claudechip_bridge             # run the bridge (Ctrl+C to stop)
 ```
+
+`… uninstall` undoes `install`. Other commands: `pair <code>`, `devices`,
+`revoke <id>`, `status`, `usage-check`. Do not use the manual install and the
+plugin at the same time: events would be sent twice. `/claudechip:setup`
+removes the manual hooks for you.
 
 ## Protocol (JSON over WebSocket)
 
@@ -72,19 +92,16 @@ Bridge → device: `hello` (bridge id, account, mac, color, nonce), `auth_ok`,
 `pair_request` (code), then signed `{"seq", "msg", "sig"}` envelopes carrying
 `decision`.
 
-## Security
+## Development
 
-The bridge only listens on the local network, accepts only paired devices and
-signed messages. Never expose it to the internet.
-
-## Roadmap
-
-- Packaging as a Claude Code plugin: hooks bundled, `userConfig` for account /
-  Mac / color, `[DECK]` rule injected at session start, bridge started in the
-  background, `/claudechip:pair <code>`.
+```sh
+claude plugin validate .
+claude --plugin-dir . -p "hi"                                       # load it without installing
+uv run --with aiohttp python scripts/fake_device.py --answer ask    # a fake device
+```
 
 ## License
 
-Source available, not open source: you may install and use the bridge unmodified,
-but not modify or redistribute it. See [LICENSE](LICENSE).
+Source available, not open source: you may install and use the plugin
+unmodified, but not modify or redistribute it. See [LICENSE](LICENSE).
 © 2026 [Squeeze Design](https://squeezedesign.es)

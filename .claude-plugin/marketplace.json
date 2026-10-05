@@ -1,0 +1,16 @@
+{
+  "name": "claudechip",
+  "description": "Claude Chip: a desk companion for Claude Code.",
+  "owner": {
+    "name": "Squeeze Design",
+    "email": "info@squeezedesign.es",
+    "url": "https://squeezedesign.es"
+  },
+  "plugins": [
+    {
+      "name": "claudechip",
+      "source": ".",
+      "description": "Connects Claude Code to the Claude Chip desk device."
+    }
+  ]
+}

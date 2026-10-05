@@ -26,7 +26,7 @@ from .httpserver import Request, Response
 from .httpserver import start as start_http
 from .websocket import WebSocket, is_upgrade
 
-from . import describe
+from . import __version__, describe
 from .config import Config
 from .context import context_percent
 from .identity import DATA_DIR, Devices, bridge_id, sign
@@ -42,7 +42,7 @@ PAIR_TTL_S = 300         # a pairing code is valid for 5 minutes
 LIVENESS_EVERY_S = 15   # how often to check that session processes are alive
 CONTEXT_EVERY_S = 10    # read the transcript for CTX at most this often per session
 STATE_FILE = DATA_DIR / "sessions.json"
-USAGE_POLL_S = 120           # direct usage reads (usage_source = "auto")
+USAGE_POLL_S = 300           # direct usage reads (usage_source = "auto"); the endpoint rate-limits
 USAGE_FRESH_S = 600          # while direct reads work, ignore the status line
 
 
@@ -58,8 +58,10 @@ class _Conn:
 
 
 class Bridge:
-    def __init__(self, cfg: Config) -> None:
+    def __init__(self, cfg: Config, config_id: str = "") -> None:
         self.cfg = cfg
+        self.config_id = config_id  # fingerprint of the config file it started with
+        self.stop = asyncio.Event()
         self.bridge_id = bridge_id()
         self.paired = Devices()
         self.conns: dict[WebSocket, _Conn] = {}
@@ -85,10 +87,16 @@ class Bridge:
         if req.path == "/ws" and req.method == "GET" and is_upgrade(req):
             await self.handle_ws(req)
             return None
-        if req.method != "POST":
-            return Response(404)
         if req.remote not in LOOPBACK:
             return Response(403)
+        if req.method == "GET" and req.path == "/health":
+            return Response.json(self.health())
+        if req.method != "POST":
+            return Response(404)
+        if req.path == "/shutdown":
+            log.info("shutdown requested")
+            self.stop.set()
+            return Response.json({"ok": True})
         try:
             data = req.json()
         except ValueError:
@@ -103,6 +111,24 @@ class Bridge:
     # ------------------------------------------------------------------
     # Messages to the device
     # ------------------------------------------------------------------
+
+    def health(self) -> dict:
+        """GET /health: lets the plugin's launcher and /claudechip:status see
+        whether this bridge is running and with which configuration."""
+        return {
+            "ok": True,
+            "version": __version__,
+            "root": str(Path(__file__).resolve().parent.parent),
+            "config_id": self.config_id,
+            "account": self.cfg.account,
+            "mac": self.cfg.mac,
+            "port": self.cfg.port,
+            "summary": self.cfg.summary,
+            "usage_source": self.cfg.usage_source,
+            "devices_connected": len(self.devices),
+            "devices_paired": len(self.paired.all()),
+            "sessions": len(self.sessions.all()),
+        }
 
     def hello_msg(self) -> dict:
         return {"type": "hello", "proto": 2, "bridge": self.bridge_id, "account": self.cfg.account,
@@ -590,10 +616,10 @@ def _alive(pid: int) -> bool:
     return True
 
 
-async def serve(cfg: Config) -> None:
+async def serve(cfg: Config, config_id: str = "") -> None:
     from .mdns import Advertiser
 
-    bridge = Bridge(cfg)
+    bridge = Bridge(cfg, config_id)
     bridge.load_sessions()
     try:
         server = await start_http(bridge.handle, "0.0.0.0", cfg.port)
@@ -613,12 +639,11 @@ async def serve(cfg: Config) -> None:
     log.info("bridge %s listening on port %d (mDNS %s)", cfg.account, cfg.port, advertiser.name)
     # Stop cleanly on kill / logout too, not only Ctrl+C: dns-sd must not
     # keep announcing a bridge that is gone
-    stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
+        loop.add_signal_handler(sig, bridge.stop.set)
     try:
-        await stop.wait()
+        await bridge.stop.wait()
         log.info("bridge stopping")
     finally:
         for task in tasks:

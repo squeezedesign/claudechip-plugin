@@ -13,7 +13,13 @@ except ImportError:  # the system python3 on macOS is 3.9
     tomllib = None
 
 BRIDGE_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = BRIDGE_DIR / "config.toml"
+DEFAULT_CONFIG = BRIDGE_DIR / "config.toml"  # manual install (git clone)
+
+
+def plugin_config_path() -> Path:
+    """Written by the plugin's SessionStart hook from the user's plugin options."""
+    from .identity import DATA_DIR
+    return DATA_DIR / "plugin-config.toml"
 
 SUMMARY_METHODS = ("deck_line", "truncate")
 USAGE_SOURCES = ("auto", "statusline")
@@ -65,11 +71,13 @@ def parse_simple_toml(text: str) -> dict:
 
 
 def load(path: Optional[Path] = None) -> Config:
-    path = path or DEFAULT_CONFIG
+    if path is None:
+        path = DEFAULT_CONFIG if DEFAULT_CONFIG.exists() else plugin_config_path()
     if not path.exists():
         raise SystemExit(
             f"config not found: {path}\n"
-            f"copy {BRIDGE_DIR / 'config.example.toml'} to {DEFAULT_CONFIG} and edit it"
+            f"copy {BRIDGE_DIR / 'config.example.toml'} to {DEFAULT_CONFIG} and edit it "
+            f"(with the Claude Code plugin it is written for you when a session starts)"
         )
     if tomllib:
         with path.open("rb") as f:

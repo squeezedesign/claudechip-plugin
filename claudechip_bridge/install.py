@@ -187,3 +187,66 @@ def uninstall(cfg: Config) -> None:
             else:
                 CLAUDE_MD.unlink()
             print(f"[DECK] rule removed from {CLAUDE_MD}")
+
+
+# ---------------------------------------------------------------------------
+# Claude Code plugin: the plugin brings its own hooks and injects the [DECK]
+# rule at session start. Only the status line (SES/SEM/CTX for terminal
+# sessions) needs a user setting, which a plugin cannot set by itself.
+# ---------------------------------------------------------------------------
+
+# A copy outside the plugin folder: its path changes with every plugin update
+STABLE_WRAPPER = STATE_DIR / "statusline.py"
+
+
+def _stable_wrapper_command(cfg: Config) -> str:
+    return f"{SYSTEM_PYTHON} {STABLE_WRAPPER} {cfg.port}"
+
+
+def setup_plugin(cfg: Config) -> None:
+    """/claudechip:setup: drop the manual install leftovers and wrap the status line."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(WRAPPER, STABLE_WRAPPER)
+    settings = _load_settings()
+    backup = _backup()
+    _remove_our_hooks(settings, cfg)  # the plugin has its own: avoid duplicates
+
+    current = settings.get("statusLine")
+    ours = (_wrapper_command(cfg), _stable_wrapper_command(cfg))
+    if current and current.get("command") not in ours and not PREVIOUS_STATUSLINE.exists():
+        PREVIOUS_STATUSLINE.write_text(json.dumps(current, indent=2) + "\n")
+    settings["statusLine"] = {"type": "command", "command": _stable_wrapper_command(cfg)}
+    _save_settings(settings)
+    print("status line wrapped (SES / SEM / CTX for terminal sessions)")
+    if backup:
+        print(f"backup of settings.json: {backup}")
+
+    if CLAUDE_MD.exists() and DECK_START in CLAUDE_MD.read_text():
+        _remove_deck_rule()
+        print("[DECK] rule removed from ~/.claude/CLAUDE.md (the plugin adds it at session start)")
+
+
+def remove_plugin_setup(cfg: Config) -> None:
+    """Undo setup_plugin: restore the previous status line."""
+    settings = _load_settings()
+    if (settings.get("statusLine") or {}).get("command") in (_wrapper_command(cfg),
+                                                             _stable_wrapper_command(cfg)):
+        if PREVIOUS_STATUSLINE.exists():
+            settings["statusLine"] = json.loads(PREVIOUS_STATUSLINE.read_text())
+            PREVIOUS_STATUSLINE.unlink()
+        else:
+            settings.pop("statusLine")
+        _save_settings(settings)
+        print("previous status line restored")
+    else:
+        print("the status line was not set by Claude Chip: nothing to undo")
+
+
+def _remove_deck_rule() -> None:
+    text = CLAUDE_MD.read_text()
+    start, end = text.index(DECK_START), text.index(DECK_END) + len(DECK_END)
+    rest = (text[:start] + text[end:]).strip()
+    if rest:
+        CLAUDE_MD.write_text(rest + "\n")
+    else:
+        CLAUDE_MD.unlink()
