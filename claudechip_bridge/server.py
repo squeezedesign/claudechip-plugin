@@ -60,6 +60,19 @@ class Bridge:
         return {"type": "hello", "account": self.cfg.account, "mac": self.cfg.mac,
                 "color": self.cfg.color}
 
+    def _update_usage(self, window: str, pct: float, resets_at: float) -> bool:
+        """Keep the freshest reading. Within one window usage only grows, so an
+        idle session reporting an older, lower value must not overwrite it;
+        a later resets_at means a new window and replaces it."""
+        old = self.usage.get(window)
+        if old is not None:
+            old_pct, old_reset = old
+            same_window = abs(resets_at - old_reset) < 60
+            if (same_window and pct <= old_pct) or resets_at < old_reset - 60:
+                return False
+        self.usage[window] = (pct, resets_at)
+        return True
+
     def _usage_pct(self, window: str) -> int:
         """Percentage of a plan window, -1 when unknown, 0 once it has reset."""
         if window not in self.usage:
@@ -405,9 +418,8 @@ class Bridge:
 
         for window, info in (data.get("rate_limits") or {}).items():
             if window in ("five_hour", "seven_day") and info.get("used_percentage") is not None:
-                value = (float(info["used_percentage"]), float(info.get("resets_at") or 0))
-                if self.usage.get(window) != value:
-                    self.usage[window] = value
+                if self._update_usage(window, float(info["used_percentage"]),
+                                      float(info.get("resets_at") or 0)):
                     changed = True
 
         if changed:
