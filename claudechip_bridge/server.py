@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
@@ -29,6 +30,7 @@ LOOPBACK = {"127.0.0.1", "::1"}
 STATE_DEBOUNCE_S = 0.2  # coalesce bursts of hook events into one state message
 AUTH_TIMEOUT_S = 5
 LIVENESS_EVERY_S = 15   # how often to check that session processes are alive
+STATE_FILE = Path.home() / ".config" / "claudechip" / "sessions.json"
 
 
 class Bridge:
@@ -91,6 +93,7 @@ class Bridge:
         async def later() -> None:
             await asyncio.sleep(STATE_DEBOUNCE_S)
             await self.broadcast(self.state_msg())
+            self.save_sessions()
 
         self._state_task = asyncio.create_task(later())
 
@@ -206,18 +209,47 @@ class Bridge:
                 await self._cancel_permission(p)
             self.schedule_state()
 
+    # ------------------------------------------------------------------
+    # Persistence: sessions survive a bridge restart
+    # ------------------------------------------------------------------
+
+    def save_sessions(self) -> None:
+        data = [{**s.to_json(), "cwd": s.cwd, "pid": self.pids.get(s.id)}
+                for s in self.sessions.all() if s.id in self.pids]
+        try:
+            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            STATE_FILE.write_text(json.dumps(data, ensure_ascii=False))
+        except OSError as e:
+            log.warning("could not save sessions: %s", e)
+
+    def load_sessions(self) -> None:
+        """Restore sessions whose Claude Code process is still running. A pending
+        permission cannot be restored (its hook died with the old bridge)."""
+        try:
+            data = json.loads(STATE_FILE.read_text())
+        except (OSError, ValueError):
+            return
+        for item in data:
+            pid = item.get("pid")
+            if not pid or not _alive(pid):
+                continue
+            s = self.sessions.get_or_create(item["id"], item.get("cwd", ""))
+            status = item.get("status", DONE)
+            self.sessions.update(s, status=WORK if status == PERM else status, text=item.get("text", ""))
+            s.ctx = item.get("ctx", 0)
+            self.pids[s.id] = pid
+        if self.sessions.all():
+            log.info("restored %d session(s): %s", len(self.sessions.all()),
+                     ", ".join(s.name for s in self.sessions.all()))
+
     async def watch_liveness(self) -> None:
         """Drop sessions whose Claude Code process is gone without a SessionEnd
         (crash, window reload, killed terminal)."""
         while True:
             await asyncio.sleep(LIVENESS_EVERY_S)
             for session_id, pid in list(self.pids.items()):
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
+                if not _alive(pid):
                     await self._end_session(session_id, f"session gone (process {pid} ended)")
-                except PermissionError:
-                    pass  # exists, owned by someone else
 
     async def on_UserPromptSubmit(self, data: dict) -> None:
         await self._answered_elsewhere(data)
@@ -383,10 +415,21 @@ class Bridge:
         return web.Response()
 
 
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass  # exists, owned by someone else
+    return True
+
+
 async def serve(cfg: Config) -> None:
     from .mdns import Advertiser
 
     bridge = Bridge(cfg)
+    bridge.load_sessions()
     # handler_cancellation: when Claude Code drops a pending PermissionRequest
     # (answered in the terminal), the handler is cancelled and we can tell the device.
     runner = web.AppRunner(bridge.app, handler_cancellation=True, access_log=None)
