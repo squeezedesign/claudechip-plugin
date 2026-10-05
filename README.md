@@ -59,3 +59,9 @@ valid token. Never expose it to the internet.
 - Packaging as a Claude Code plugin: hooks bundled, `userConfig` for account /
   Mac / color, `[DECK]` rule injected at session start, bridge started in the
   background, `/claudechip:pair <code>`.
+
+## License
+
+Source available, not open source: you may install and use the bridge unmodified,
+but not modify or redistribute it. See [LICENSE](LICENSE).
+© 2026 [Squeeze Design](https://squeezedesign.es)

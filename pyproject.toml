@@ -3,10 +3,15 @@ name = "claudechip-bridge"
 version = "0.1.0"
 description = "Bridge between Claude Code on a Mac and the Claude Chip desk device"
 requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "Squeeze Design", email = "info@squeezedesign.es" }]
 dependencies = [
     "aiohttp>=3.10",
     "zeroconf>=0.136",
 ]
+
+[project.urls]
+Homepage = "https://squeezedesign.es"
 
 [project.scripts]
 claudechip-bridge = "claudechip_bridge.__main__:main"
