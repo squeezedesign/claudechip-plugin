@@ -101,6 +101,13 @@ class Bridge:
             except ConnectionError:
                 self.devices.discard(ws)
 
+    async def flush_state(self) -> None:
+        """Send the state right now. Used before events that refer to a session
+        (permission, summary) so the device always knows it first."""
+        if self._state_task and not self._state_task.done():
+            self._state_task.cancel()
+        await self.broadcast(self.state_msg())
+
     def schedule_state(self) -> None:
         """Send a state message soon, merging changes that arrive together."""
         if self._state_task and not self._state_task.done():
@@ -315,8 +322,8 @@ class Bridge:
             return
         self.sessions.update(s, status=ASK, text=text)
         log.info("[%s] waiting for the user: %s", s.name, text)
+        await self.flush_state()
         await self.broadcast({"type": "summary", "session_id": s.id, "status": ASK, "text": text})
-        self.schedule_state()
 
     async def on_PostToolUse(self, data: dict) -> None:
         await self._answered_elsewhere(data)
@@ -333,8 +340,8 @@ class Bridge:
         p = self.perms.create(s.id, data.get("tool_use_id", ""), text)
         self.sessions.update(s, status=PERM, text=text)
         log.info("[%s] permission %s: %s", s.name, p.request_id, text)
+        await self.flush_state()
         await self.broadcast(p.to_json())
-        self.schedule_state()
 
         try:
             allow = await p.future  # no timeout: device or terminal, first one wins
@@ -381,8 +388,8 @@ class Bridge:
         text = summarize(data.get("last_assistant_message", ""), self.cfg.summary)
         self.sessions.update(s, status=DONE, text=text)
         log.info("[%s] done: %s", s.name, text)
+        await self.flush_state()
         await self.broadcast({"type": "summary", "session_id": s.id, "status": DONE, "text": text})
-        self.schedule_state()
 
     async def on_StopFailure(self, data: dict) -> None:
         await self._answered_elsewhere(data)
@@ -391,8 +398,8 @@ class Bridge:
         text = clip(f"error: {error}")
         self.sessions.update(s, status=ERR, text=text)
         log.info("[%s] error: %s", s.name, text)
+        await self.flush_state()
         await self.broadcast({"type": "summary", "session_id": s.id, "status": ERR, "text": text})
-        self.schedule_state()
 
     # Notifications that mean "Claude is waiting for you", with the Spanish text
     # shown on the device (Claude Code's own messages are in English).
