@@ -28,6 +28,7 @@ from .websocket import WebSocket, is_upgrade
 
 from . import describe
 from .config import Config
+from .context import context_percent
 from .identity import DATA_DIR, Devices, bridge_id, sign
 from .permissions import Permissions
 from .sessions import ASK, DONE, ERR, PERM, WORK, SessionStore
@@ -39,6 +40,7 @@ LOOPBACK = {"127.0.0.1", "::1"}
 STATE_DEBOUNCE_S = 0.2  # coalesce bursts of hook events into one state message
 PAIR_TTL_S = 300         # a pairing code is valid for 5 minutes
 LIVENESS_EVERY_S = 15   # how often to check that session processes are alive
+CONTEXT_EVERY_S = 10    # read the transcript for CTX at most this often per session
 STATE_FILE = DATA_DIR / "sessions.json"
 USAGE_POLL_S = 120           # direct usage reads (usage_source = "auto")
 USAGE_FRESH_S = 600          # while direct reads work, ignore the status line
@@ -70,6 +72,7 @@ class Bridge:
         self.usage: dict[str, tuple[float, float]] = {}
         # Claude Code process of each session, sent by the hooks as X-Claude-Pid
         self.pids: dict[str, int] = {}
+        self._context_read_at: dict[str, float] = {}  # last CTX read per session
         self._direct_usage_at = 0.0  # last successful direct usage read
         self._state_task: asyncio.Task | None = None
 
@@ -431,6 +434,10 @@ class Bridge:
     async def on_PostToolUse(self, data: dict) -> None:
         await self._answered_elsewhere(data)
         s = self._session(data)
+        now = time.time()
+        if now - self._context_read_at.get(s.id, 0) >= CONTEXT_EVERY_S:
+            self._context_read_at[s.id] = now
+            await self._update_context(s, data)
         if s.status in (PERM, DONE, ASK):
             self.sessions.update(s, status=WORK)
             self.schedule_state()
@@ -488,9 +495,21 @@ class Bridge:
             self.sessions.update(s, status=WORK, text="sigo trabajando...")
         self.schedule_state()
 
+    async def _update_context(self, s, data: dict) -> None:
+        """CTX from the transcript: works for VS Code sessions too, which send
+        no status line. Read in a thread, the file can be large."""
+        path = data.get("transcript_path")
+        if not path:
+            return
+        pct = await asyncio.to_thread(context_percent, path)
+        if pct is not None and pct != s.ctx:
+            s.ctx = pct
+            self.schedule_state()
+
     async def on_Stop(self, data: dict) -> None:
         await self._answered_elsewhere(data)
         s = self._session(data)
+        await self._update_context(s, data)
         text = summarize(data.get("last_assistant_message", ""), self.cfg.summary)
         self.sessions.update(s, status=DONE, text=text)
         log.info("[%s] done: %s", s.name, text)
