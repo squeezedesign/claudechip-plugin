@@ -28,6 +28,9 @@ def main() -> None:
         format="%(asctime)s %(message)s",
         datefmt="%H:%M:%S",
     )
+    # zeroconf logs a harmless "No route to host" traceback for interfaces
+    # without a route (VPN tunnels, inactive adapters); keep the output clean
+    logging.getLogger("zeroconf").setLevel(logging.CRITICAL)
     cfg = config.load(args.config)
 
     if args.command == "install":
