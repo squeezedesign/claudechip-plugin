@@ -12,6 +12,8 @@ the status line data when this fails.
 from __future__ import annotations
 
 import json
+import os
+import ssl
 import subprocess
 import time
 import urllib.error
@@ -21,6 +23,7 @@ from datetime import datetime
 
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+SYSTEM_CA_FILE = "/etc/ssl/cert.pem"
 WINDOWS = ("five_hour", "seven_day")
 
 
@@ -72,6 +75,15 @@ def _epoch(value) -> float:
     return 0.0
 
 
+def _ssl_context() -> ssl.SSLContext:
+    """Python builds from python.org ship without CA certificates; fall back to
+    the bundle macOS keeps in /etc/ssl/cert.pem so HTTPS works with any python3."""
+    ctx = ssl.create_default_context()
+    if not ctx.cert_store_stats().get("x509_ca") and os.path.exists(SYSTEM_CA_FILE):
+        ctx.load_verify_locations(SYSTEM_CA_FILE)
+    return ctx
+
+
 def fetch_raw(login: Login) -> dict:
     """The endpoint's JSON answer (usage figures only, no credentials)."""
     if login.expired:
@@ -82,7 +94,7 @@ def fetch_raw(login: Login) -> dict:
         "Content-Type": "application/json",
     })
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10, context=_ssl_context()) as resp:
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         raise UsageError(f"usage endpoint answered HTTP {e.code}") from None
