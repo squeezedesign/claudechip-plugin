@@ -1,7 +1,7 @@
 {
   "name": "claudechip",
   "displayName": "Claude Chip",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Connects Claude Code to the Claude Chip desk device: session status, short summaries and approve/deny keys.",
   "author": {
     "name": "Squeeze Design",

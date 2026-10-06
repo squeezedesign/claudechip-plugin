@@ -16,6 +16,14 @@ from typing import Optional
 TAIL_BYTES = 256 * 1024  # the last answers are always near the end
 DEFAULT_WINDOW = 200_000
 LARGE_WINDOW = 1_000_000
+# Models whose standard window is 1M even without the "[1m]" suffix
+LARGE_WINDOW_MODELS = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5")
+
+
+def window_for(model: str, used: int) -> int:
+    if used > DEFAULT_WINDOW or "[1m]" in model or model.startswith(LARGE_WINDOW_MODELS):
+        return LARGE_WINDOW
+    return DEFAULT_WINDOW
 
 
 def context_percent(transcript_path: str) -> Optional[int]:
@@ -44,6 +52,5 @@ def context_percent(transcript_path: str) -> Optional[int]:
         if not used:
             continue
         model = str(message.get("model", ""))
-        window = LARGE_WINDOW if used > DEFAULT_WINDOW or "[1m]" in model else DEFAULT_WINDOW
-        return min(100, round(used * 100 / window))
+        return min(100, round(used * 100 / window_for(model, used)))
     return None
