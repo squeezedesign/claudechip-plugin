@@ -1,7 +1,7 @@
 {
   "name": "claudechip",
   "displayName": "Claude Chip",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Connects Claude Code to the Claude Chip desk device: session status, short summaries and approve/deny keys.",
   "author": {
     "name": "Squeeze Design",
@@ -53,6 +53,18 @@
       "options": [
         "auto",
         "statusline"
+      ],
+      "default": "auto"
+    },
+    "open_in": {
+      "type": "string",
+      "title": "Open sessions in",
+      "description": "Where a session resumed from the device opens. auto: iTerm2 if installed, else Terminal. phpstorm: opens the project and copies the resume command to the clipboard.",
+      "options": [
+        "auto",
+        "iterm",
+        "terminal",
+        "phpstorm"
       ],
       "default": "auto"
     },

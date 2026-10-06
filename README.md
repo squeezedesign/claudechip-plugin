@@ -25,6 +25,7 @@ Then, in Claude Code, open `/plugin`, choose **claudechip** and set its options:
 | Account color | Hex color of the account's tabs and name, e.g. `#D7DF23` |
 | Summaries | `deck_line` (Claude ends each answer with a `[DECK]` line) or `truncate` |
 | Plan usage | `auto` (read from Anthropic with your Claude Code login; macOS asks once for Keychain access) or `statusline` |
+| Open sessions in | Where a session resumed from the device opens: `auto` (iTerm2 if installed, else Terminal), `iterm`, `terminal` or `phpstorm` (opens the project and copies the command) |
 | Port | Local port of the bridge (default 8765) |
 
 Start a new Claude Code session: the bridge starts by itself in the background
@@ -37,7 +38,7 @@ and the device finds it on the network.
 | `/claudechip:pair 482913` | Pair the device showing that code (first time, or from ⚙ AJUSTES → EMPAREJAR) |
 | `/claudechip:status` | Is the bridge running, is the device connected |
 | `/claudechip:devices` | Paired devices; `/claudechip:devices revoke <id>` forgets one |
-| `/claudechip:setup` | Wrap your status line so terminal sessions report plan usage and context (`remove` to undo). Also cleans up a manual install |
+| `/claudechip:setup` | Wrap your status line so terminal sessions report plan usage and context, and start the bridge when you log in (`remove` undoes both). Also cleans up a manual install |
 
 ## How it works
 
@@ -52,6 +53,13 @@ and the device finds it on the network.
   the console.
 - **Summaries**: with `deck_line`, a short rule added at session start asks
   Claude to end each answer with `[DECK] …`; otherwise the first sentence.
+- **History**: the bridge keeps the last 20 summaries of each session; hold
+  the encoder to browse them.
+- **Recent sessions**: `↺ RECIENTES` lists the latest sessions of this Mac
+  (from `~/.claude/projects`); OK opens `claude --resume <id>` in its folder.
+  The device can only pick one from the list the bridge sent; the folder and
+  the command never come from it. The first time, macOS asks whether the
+  bridge may control iTerm / Terminal.
 - **Usage**: plan usage (SES / SEM) straight from Anthropic every 5 minutes,
   or from the status line; context (CTX) from each session's transcript.
 - **State** lives in `~/.config/claudechip/`: paired devices, sessions,
@@ -88,9 +96,10 @@ removes the manual hooks for you.
 
 Bridge → device: `hello` (bridge id, account, mac, color, nonce), `auth_ok`,
 `auth_fail`, `paired` (token, once), `revoked`, `state` (usage + sessions),
-`permission`, `permission_cancel`, `summary`. Device → bridge: `auth` (HMAC),
-`pair_request` (code), then signed `{"seq", "msg", "sig"}` envelopes carrying
-`decision`.
+`permission`, `permission_cancel`, `summary`, `history`, `recent`,
+`resume_result`. Device → bridge: `auth` (HMAC), `pair_request` (code), then
+signed `{"seq", "msg", "sig"}` envelopes carrying `decision`, `history_get`,
+`recent_get` or `resume`.
 
 ## Development
 

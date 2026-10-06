@@ -46,6 +46,7 @@ def desired_config() -> dict:
         "port": int(option("port", "8765")),
         "summary": option("summary", "deck_line"),
         "usage_source": option("usage_source", "auto"),
+        "open_in": option("open_in", "auto"),
     }
 
 
@@ -113,6 +114,10 @@ def main() -> None:
         running = None
     if not running:
         start_bridge(port)
+    # Where the login LaunchAgent (/claudechip:setup) finds the current version
+    root_file = plugin_config_path().parent / "plugin_root"
+    if not root_file.exists() or root_file.read_text().strip() != ROOT:
+        root_file.write_text(ROOT + "\n")
 
     post(port, "/hook/SessionStart", event, {
         "X-Claude-Pid": str(os.getppid()),

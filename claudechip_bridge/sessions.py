@@ -10,17 +10,21 @@ from dataclasses import dataclass, field
 # the console (plan approval, a question) and the device can only call attention.
 WORK, PERM, DONE, ERR, ASK = "work", "perm", "done", "err", "ask"
 
-NAME_MAX = 23  # firmware Session::name is 24 bytes
+NAME_MAX = 23     # firmware Session::name is 24 bytes
+HISTORY_MAX = 20  # summaries kept per session for the device's history view
+
+
+def _fit(name: str, limit: int = NAME_MAX) -> str:
+    """Keep a name within the firmware buffer, counting UTF-8 bytes."""
+    while len(name.encode()) > limit:
+        name = name[:-1]
+    return name
 
 
 def session_name(cwd: str) -> str:
     """Tab name: the project folder, uppercase."""
     name = os.path.basename(os.path.normpath(cwd)) or cwd
-    name = name.upper()
-    # Keep it within the firmware buffer, counting UTF-8 bytes
-    while len(name.encode()) > NAME_MAX:
-        name = name[:-1]
-    return name
+    return _fit(name.upper())
 
 
 @dataclass
@@ -31,16 +35,28 @@ class Session:
     status: str = DONE
     ctx: int = 0
     text: str = ""
+    title: str = ""          # Claude Code's title for the conversation
+    transcript: str = ""     # path of its transcript, from the hooks
+    started: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
+    # Latest summaries, oldest first: {"t": epoch, "status", "text"}
+    history: list = field(default_factory=list)
 
-    def to_json(self) -> dict:
+    def to_json(self, name: str | None = None) -> dict:
         return {
             "id": self.id,
-            "name": self.name,
+            "name": name or self.name,
+            "title": self.title,
             "status": self.status,
             "ctx": self.ctx,
             "text": self.text,
         }
+
+    def add_history(self, status: str, text: str) -> None:
+        if self.history and self.history[-1]["text"] == text:
+            return
+        self.history.append({"t": time.time(), "status": status, "text": text})
+        del self.history[:-HISTORY_MAX]
 
 
 class SessionStore:
@@ -76,4 +92,15 @@ class SessionStore:
         return self._sessions.pop(session_id, None)
 
     def all(self) -> list[Session]:
-        return sorted(self._sessions.values(), key=lambda s: s.name)
+        return sorted(self._sessions.values(), key=lambda s: (s.name, s.started))
+
+    def to_json(self) -> list[dict]:
+        """Sessions for the device. Two sessions of the same project get a
+        number ("CLAUDE-CHIP", "CLAUDE-CHIP 2") in the order they started."""
+        seen: dict[str, int] = {}
+        result = []
+        for s in self.all():
+            n = seen[s.name] = seen.get(s.name, 0) + 1
+            name = s.name if n == 1 else _fit(s.name, NAME_MAX - len(f" {n}")) + f" {n}"
+            result.append(s.to_json(name))
+        return result

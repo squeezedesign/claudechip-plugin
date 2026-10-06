@@ -9,6 +9,8 @@ it prints (python3 -m claudechip_bridge pair <code>). The token is kept in scrip
 
 --answer controls permission requests: ask (prompt here, default),
 allow / deny (automatic) or none (never answer).
+--send '{"type": "recent_get"}' sends signed messages once authenticated
+(repeatable), e.g. history_get, recent_get, resume.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ async def main() -> None:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--answer", choices=["ask", "allow", "deny", "none"], default="ask")
+    p.add_argument("--send", action="append", default=[], metavar="JSON")
     args = p.parse_args()
 
     async with aiohttp.ClientSession() as http:
@@ -79,6 +82,9 @@ async def main() -> None:
                 elif kind == "auth_ok":
                     ok = hmac.compare_digest(data.get("mac", ""), sign(token, f"ok:{my_nonce}:{bridge_nonce}"))
                     print("** bridge verified" if ok else "** WARNING: bridge failed to prove the token")
+                    for msg in args.send:
+                        await send_signed(json.loads(msg))
+                        print(">>", msg)
                 elif kind == "paired":
                     token = data["token"]
                     TOKEN_FILE.write_text(token)

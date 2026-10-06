@@ -26,12 +26,12 @@ from .httpserver import Request, Response
 from .httpserver import start as start_http
 from .websocket import WebSocket, is_upgrade
 
-from . import __version__, describe
+from . import __version__, describe, resume, transcripts
 from .config import Config
 from .context import context_percent, learn_window
 from .identity import DATA_DIR, Devices, bridge_id, sign
 from .permissions import Permissions
-from .sessions import ASK, DONE, ERR, PERM, WORK, SessionStore
+from .sessions import ASK, DONE, ERR, PERM, WORK, SessionStore, session_name
 from .summary import clip, summarize
 
 log = logging.getLogger("bridge")
@@ -55,6 +55,7 @@ class _Conn:
     device_id: str = ""
     token: str | None = None  # set once authenticated
     seq: int = 0            # last accepted message counter
+    recent: dict = None     # session id -> folder of the last "recent" list sent
 
 
 class Bridge:
@@ -161,7 +162,7 @@ class Bridge:
             "type": "state",
             "account": self.cfg.account,
             "usage": {"ses": self._usage_pct("five_hour"), "sem": self._usage_pct("seven_day")},
-            "sessions": [s.to_json() for s in self.sessions.all()],
+            "sessions": self.sessions.to_json(),
         }
 
     async def broadcast(self, msg: dict) -> None:
@@ -271,9 +272,11 @@ class Bridge:
             return
         conn.seq = seq
         try:
-            await self.on_device_message(json.loads(body))
+            data = json.loads(body)
         except ValueError:
-            pass
+            return
+        if isinstance(data, dict):
+            await self.on_device_message(conn, data)
 
     async def handle_pair(self, data: dict) -> Response:
         """POST /pair {"code"}: from 'claudechip-bridge pair <code>' on this Mac."""
@@ -303,7 +306,7 @@ class Bridge:
         log.info("device %s revoked", full)
         return Response.json({"ok": True, "device": full})
 
-    async def on_device_message(self, data: dict) -> None:
+    async def on_device_message(self, conn: "_Conn", data: dict) -> None:
         kind = data.get("type")
         if kind == "decision":
             request_id = str(data.get("request_id", ""))
@@ -312,10 +315,45 @@ class Bridge:
                 log.info("decision %s: %s (from device)", request_id, "allow" if allow else "deny")
             else:
                 log.info("decision %s ignored: already answered", request_id)
-        elif kind in ("select", "new_session"):
-            log.info("%s not supported yet (phase 5): %s", kind, data)
+        elif kind == "history_get":
+            await self._send_history(conn, str(data.get("session_id", "")))
+        elif kind == "recent_get":
+            await self._send_recent(conn)
+        elif kind == "resume":
+            await self._resume(conn, str(data.get("id", "")))
         else:
             log.debug("unknown device message: %s", data)
+
+    async def _send_history(self, conn: "_Conn", session_id: str) -> None:
+        s = self.sessions.get(session_id)
+        now = time.time()
+        items = [{"age": int(now - h["t"]), "status": h["status"], "text": h["text"]}
+                 for h in (s.history if s else [])]
+        await conn.ws.send_json({"type": "history", "session_id": session_id, "items": items})
+
+    async def _send_recent(self, conn: "_Conn") -> None:
+        """The latest sessions of this Mac that are not open: the device can
+        only resume one of these, by id (the folder never comes from it)."""
+        open_ids = {s.id for s in self.sessions.all()}
+        items = await asyncio.to_thread(transcripts.recent_sessions, open_ids, self.cfg.summary)
+        conn.recent = {item["id"]: item["cwd"] for item in items}
+        await conn.ws.send_json({"type": "recent", "items": [
+            {"id": item["id"], "name": session_name(item["cwd"]), "title": item["title"],
+             "age": item["age"], "text": item["text"]} for item in items]})
+
+    async def _resume(self, conn: "_Conn", session_id: str) -> None:
+        cwd = (conn.recent or {}).get(session_id)
+        if not cwd:
+            await conn.ws.send_json({"type": "resume_result", "ok": False, "error": "unknown session"})
+            return
+        try:
+            where = await asyncio.to_thread(resume.resume, cwd, session_id, self.cfg.open_in)
+        except (resume.ResumeError, OSError) as e:
+            log.warning("resume %s failed: %s", session_id, e)
+            await conn.ws.send_json({"type": "resume_result", "ok": False, "error": str(e)})
+            return
+        log.info("resumed %s in %s (%s)", session_id, where, cwd)
+        await conn.ws.send_json({"type": "resume_result", "ok": True, "where": where})
 
     # ------------------------------------------------------------------
     # Claude Code hooks
@@ -344,6 +382,8 @@ class Bridge:
         s = self.sessions.get_or_create(session_id, project or data.get("cwd", ""))
         if project:
             self.sessions.set_project(session_id, project)
+        if data.get("transcript_path"):
+            s.transcript = data["transcript_path"]
         return s
 
     async def on_SessionStart(self, data: dict) -> None:
@@ -369,7 +409,8 @@ class Bridge:
     # ------------------------------------------------------------------
 
     def save_sessions(self) -> None:
-        data = [{**s.to_json(), "cwd": s.cwd, "pid": self.pids.get(s.id)}
+        data = [{**s.to_json(), "cwd": s.cwd, "pid": self.pids.get(s.id), "started": s.started,
+                 "transcript": s.transcript, "history": s.history}
                 for s in self.sessions.all() if s.id in self.pids]
         try:
             STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -392,6 +433,10 @@ class Bridge:
             status = item.get("status", DONE)
             self.sessions.update(s, status=WORK if status == PERM else status, text=item.get("text", ""))
             s.ctx = item.get("ctx", 0)
+            s.title = item.get("title", "")
+            s.transcript = item.get("transcript", "")
+            s.started = item.get("started", s.started)
+            s.history = item.get("history", [])
             self.pids[s.id] = pid
         if self.sessions.all():
             log.info("restored %d session(s): %s", len(self.sessions.all()),
@@ -453,6 +498,7 @@ class Bridge:
         if s.status == ASK and s.text == text:
             return
         self.sessions.update(s, status=ASK, text=text)
+        s.add_history(ASK, text)
         log.info("[%s] waiting for the user: %s", s.name, text)
         await self.flush_state()
         await self.broadcast({"type": "summary", "session_id": s.id, "status": ASK, "text": text})
@@ -536,8 +582,10 @@ class Bridge:
         await self._answered_elsewhere(data)
         s = self._session(data)
         await self._update_context(s, data)
+        s.title = await asyncio.to_thread(transcripts.session_title, s.transcript) or s.title
         text = summarize(data.get("last_assistant_message", ""), self.cfg.summary)
         self.sessions.update(s, status=DONE, text=text)
+        s.add_history(DONE, text)
         log.info("[%s] done: %s", s.name, text)
         await self.flush_state()
         await self.broadcast({"type": "summary", "session_id": s.id, "status": DONE, "text": text})
@@ -548,6 +596,7 @@ class Bridge:
         error = data.get("error") or data.get("message") or "fallo de la API"
         text = clip(f"error: {error}")
         self.sessions.update(s, status=ERR, text=text)
+        s.add_history(ERR, text)
         log.info("[%s] error: %s", s.name, text)
         await self.flush_state()
         await self.broadcast({"type": "summary", "session_id": s.id, "status": ERR, "text": text})

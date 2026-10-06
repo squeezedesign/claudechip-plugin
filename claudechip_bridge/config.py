@@ -23,6 +23,7 @@ def plugin_config_path() -> Path:
 
 SUMMARY_METHODS = ("deck_line", "truncate")
 USAGE_SOURCES = ("auto", "statusline")
+OPEN_IN = ("auto", "iterm", "terminal", "phpstorm")
 
 
 @dataclass
@@ -33,6 +34,7 @@ class Config:
     port: int = 8765
     summary: str = "deck_line"
     usage_source: str = "auto"
+    open_in: str = "auto"  # where "resume" opens a session (SPEC phase 5)
     dev_token: str = ""  # obsolete since pairing; accepted and ignored
 
     @property
@@ -99,4 +101,6 @@ def load(path: Optional[Path] = None) -> Config:
         raise SystemExit(f"summary must be one of {SUMMARY_METHODS}, got {cfg.summary!r}")
     if cfg.usage_source not in USAGE_SOURCES:
         raise SystemExit(f"usage_source must be one of {USAGE_SOURCES}, got {cfg.usage_source!r}")
+    if cfg.open_in not in OPEN_IN:
+        raise SystemExit(f"open_in must be one of {OPEN_IN}, got {cfg.open_in!r}")
     return cfg

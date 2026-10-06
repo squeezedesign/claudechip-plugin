@@ -11,7 +11,10 @@ uninstall reverses all of it.
 from __future__ import annotations
 
 import json
+import os
+import plistlib
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -197,6 +200,10 @@ def uninstall(cfg: Config) -> None:
 
 # A copy outside the plugin folder: its path changes with every plugin update
 STABLE_WRAPPER = STATE_DIR / "statusline.py"
+AUTOSTART = Path(__file__).resolve().parent / "autostart.py"
+STABLE_AUTOSTART = STATE_DIR / "autostart.py"
+AGENT_LABEL = "es.squeezedesign.claudechip"
+AGENT_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{AGENT_LABEL}.plist"
 
 
 def _stable_wrapper_command(cfg: Config) -> str:
@@ -225,6 +232,36 @@ def setup_plugin(cfg: Config) -> None:
         _remove_deck_rule()
         print("[DECK] rule removed from ~/.claude/CLAUDE.md (the plugin adds it at session start)")
 
+    _install_login_agent()
+    print("bridge starts when you log in to this Mac (LaunchAgent)")
+
+
+def _install_login_agent() -> None:
+    """LaunchAgent that starts the bridge at login. Not loaded right away: a
+    bridge is running already (this command comes from a Claude Code session)."""
+    shutil.copy2(AUTOSTART, STABLE_AUTOSTART)
+    log = STATE_DIR / "bridge.log"
+    plist = {
+        "Label": AGENT_LABEL,
+        "ProgramArguments": [SYSTEM_PYTHON, str(STABLE_AUTOSTART)],
+        "RunAtLoad": True,
+        "StandardOutPath": str(log),
+        "StandardErrorPath": str(log),
+    }
+    AGENT_PLIST.parent.mkdir(parents=True, exist_ok=True)
+    with AGENT_PLIST.open("wb") as f:
+        plistlib.dump(plist, f)
+
+
+def _remove_login_agent() -> bool:
+    if not AGENT_PLIST.exists():
+        return False
+    subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(AGENT_PLIST)],
+                   capture_output=True, check=False)
+    AGENT_PLIST.unlink()
+    STABLE_AUTOSTART.unlink(missing_ok=True)
+    return True
+
 
 def remove_plugin_setup(cfg: Config) -> None:
     """Undo setup_plugin: restore the previous status line."""
@@ -240,6 +277,8 @@ def remove_plugin_setup(cfg: Config) -> None:
         print("previous status line restored")
     else:
         print("the status line was not set by Claude Chip: nothing to undo")
+    if _remove_login_agent():
+        print("login LaunchAgent removed")
 
 
 def _remove_deck_rule() -> None:
