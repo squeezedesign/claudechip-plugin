@@ -13,14 +13,55 @@ import json
 import os
 from typing import Optional
 
+from .identity import DATA_DIR
+
 TAIL_BYTES = 256 * 1024  # the last answers are always near the end
 DEFAULT_WINDOW = 200_000
 LARGE_WINDOW = 1_000_000
-# Models whose standard window is 1M even without the "[1m]" suffix
+# Models whose standard window is 1M even without the "[1m]" suffix; only a
+# fallback for models no terminal session has reported yet
 LARGE_WINDOW_MODELS = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5")
+WINDOWS_FILE = DATA_DIR / "context_windows.json"
+
+_learned: Optional[dict] = None
+
+
+def _model_key(model: str) -> str:
+    # The status line may say "claude-sonnet-4-5[1m]", the transcript only the API id
+    return model.split("[", 1)[0].strip()
+
+
+def _learned_windows() -> dict:
+    global _learned
+    if _learned is None:
+        try:
+            _learned = json.loads(WINDOWS_FILE.read_text())
+        except (OSError, ValueError):
+            _learned = {}
+    return _learned
+
+
+def learn_window(model: str, size) -> None:
+    """Remember the real window of a model, as reported by the status line,
+    so VS Code sessions (no status line) get it right too."""
+    key = _model_key(str(model or ""))
+    if not key or not isinstance(size, int) or size <= 0:
+        return
+    learned = _learned_windows()
+    if learned.get(key) == size:
+        return
+    learned[key] = size
+    try:
+        WINDOWS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        WINDOWS_FILE.write_text(json.dumps(learned, indent=2) + "\n")
+    except OSError:
+        pass
 
 
 def window_for(model: str, used: int) -> int:
+    learned = _learned_windows().get(_model_key(model))
+    if learned and used <= learned:
+        return learned
     if used > DEFAULT_WINDOW or "[1m]" in model or model.startswith(LARGE_WINDOW_MODELS):
         return LARGE_WINDOW
     return DEFAULT_WINDOW

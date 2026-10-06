@@ -28,7 +28,7 @@ from .websocket import WebSocket, is_upgrade
 
 from . import __version__, describe
 from .config import Config
-from .context import context_percent
+from .context import context_percent, learn_window
 from .identity import DATA_DIR, Devices, bridge_id, sign
 from .permissions import Permissions
 from .sessions import ASK, DONE, ERR, PERM, WORK, SessionStore
@@ -588,7 +588,9 @@ class Bridge:
             s = self.sessions.get_or_create(session_id, project or ws.get("current_dir") or data.get("cwd", ""))
             if project:
                 self.sessions.set_project(session_id, project)
-            ctx = (data.get("context_window") or {}).get("used_percentage")
+            window = data.get("context_window") or {}
+            learn_window((data.get("model") or {}).get("id"), window.get("context_window_size"))
+            ctx = window.get("used_percentage")
             if ctx is not None and round(ctx) != s.ctx:
                 s.ctx = round(ctx)
                 changed = True
