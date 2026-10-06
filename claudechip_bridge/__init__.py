@@ -1,3 +1,3 @@
 """Claude Chip bridge: connects Claude Code on this Mac to the desk device."""
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"

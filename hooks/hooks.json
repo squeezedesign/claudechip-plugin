@@ -97,9 +97,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"${CLAUDE_PLUGIN_ROOT}/claudechip_bridge/question.py\"",
-            "async": true,
-            "asyncRewake": true
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh\" Stop",
+            "async": true
           }
         ]
       }

@@ -81,9 +81,7 @@ class Bridge:
         # Sessions that ended: async hooks and the status line may still report
         # them a moment later, which must not bring them back (oldest first)
         self._ended: list[str] = []
-        # Yes/no questions waiting for the device: session id -> (question id, future)
-        self.questions: dict[str, tuple[str, asyncio.Future]] = {}
-        self._question_ids = 0
+
         self._direct_usage_at = 0.0  # last successful direct usage read
         self._state_task: asyncio.Task | None = None
 
@@ -166,15 +164,11 @@ class Bridge:
         return round(pct)
 
     def state_msg(self) -> dict:
-        sessions = self.sessions.to_json()
-        for item in sessions:  # the device answers a question by its id
-            if item["id"] in self.questions:
-                item["qid"] = self.questions[item["id"]][0]
         return {
             "type": "state",
             "account": self.cfg.account,
             "usage": {"ses": self._usage_pct("five_hour"), "sem": self._usage_pct("seven_day")},
-            "sessions": sessions,
+            "sessions": self.sessions.to_json(),
         }
 
     async def broadcast(self, msg: dict) -> None:
@@ -327,8 +321,6 @@ class Bridge:
                 log.info("decision %s: %s (from device)", request_id, "allow" if allow else "deny")
             else:
                 log.info("decision %s ignored: already answered", request_id)
-        elif kind == "reply":
-            await self._reply(str(data.get("qid", "")), bool(data.get("yes")))
         elif kind == "history_get":
             await self._send_history(conn, str(data.get("session_id", "")))
         elif kind == "recent_get":
@@ -389,7 +381,7 @@ class Bridge:
             if event != "SessionStart":
                 return Response()  # a late event of a closed session
             self._ended.remove(session_id)  # resumed: same id, alive again
-        if event in ("PermissionRequest", "Stop"):
+        if event == "PermissionRequest":
             result = await handler(data, request)
         else:
             result = await handler(data)
@@ -416,7 +408,6 @@ class Bridge:
 
     async def _end_session(self, session_id: str, reason: str) -> None:
         self.pids.pop(session_id, None)
-        self._drop_question(session_id)
         if session_id and session_id not in self._ended:
             self._ended.append(session_id)
             del self._ended[:-ENDED_MEMORY]
@@ -454,8 +445,8 @@ class Bridge:
                 continue
             s = self.sessions.get_or_create(item["id"], item.get("cwd", ""))
             status = item.get("status", DONE)
-            # A pending permission or question cannot be restored: its hook died with the old bridge
-            status = WORK if status == PERM else DONE if status == QUESTION else status
+            # A pending permission cannot be restored: its hook died with the old bridge
+            status = WORK if status == PERM else status
             self.sessions.update(s, status=status, text=item.get("text", ""))
             s.ctx = item.get("ctx", 0)
             s.title = item.get("title", "")
@@ -504,7 +495,6 @@ class Bridge:
 
     async def on_UserPromptSubmit(self, data: dict) -> None:
         await self._answered_elsewhere(data)
-        self._drop_question(data.get("session_id", ""))  # answered in the terminal
         s = self._session(data)
         prompt = data.get("prompt") or data.get("message") or ""
         self.sessions.update(s, status=WORK, text=clip(f"pensando: {prompt}") if prompt else "pensando...")
@@ -609,76 +599,20 @@ class Bridge:
             s.ctx = pct
             self.schedule_state()
 
-    async def on_Stop(self, data: dict, request: Request) -> Optional[dict]:
+    async def on_Stop(self, data: dict) -> None:
         await self._answered_elsewhere(data)
         s = self._session(data)
-        self._drop_question(s.id)  # an older question is moot now
         await self._update_context(s, data)
         s.title = await asyncio.to_thread(transcripts.session_title, s.transcript) or s.title
         message = data.get("last_assistant_message", "")
         text = summarize(message, self.cfg.summary)
-        # A yes/no question can be answered from the device, but only through
-        # the plugin's Stop hook (question.py), which can carry the answer back
-        question = (request.headers.get("x-claude-wait") == "1" and self.cfg.summary == "deck_line"
-                    and deck_question(message))
-        status = QUESTION if question else DONE
-        future = None
-        if question:
-            self._question_ids += 1
-            qid = f"q{self._question_ids}"
-            future = asyncio.get_running_loop().create_future()
-            self.questions[s.id] = (qid, future)
+        # A yes/no question ([DECK?]) is shown as pending; it is answered in the console
+        status = QUESTION if self.cfg.summary == "deck_line" and deck_question(message) else DONE
         self.sessions.update(s, status=status, text=text)
         s.add_history(status, text)
-        log.info("[%s] %s: %s", s.name, "asks" if question else "done", text)
+        log.info("[%s] %s: %s", s.name, "asks" if status == QUESTION else "done", text)
         await self.flush_state()
-        summary = {"type": "summary", "session_id": s.id, "status": status, "text": text}
-        if question:
-            summary["qid"] = qid
-        await self.broadcast(summary)
-        if not question:
-            return None
-
-        # Runs in the background on Claude Code's side: no hurry, no timeout
-        gone = asyncio.ensure_future(request.wait_disconnect())
-        done, _ = await asyncio.wait({future, gone}, return_when=asyncio.FIRST_COMPLETED)
-        gone.cancel()
-        if future not in done:
-            self._drop_question(s.id)
-            return None
-        answer = future.result()
-        return {"answer": answer} if answer else None
-
-    async def _reply(self, qid: str, yes: bool) -> None:
-        """OK / NO on the device: wake Claude up with the answer."""
-        for session_id, (pending, future) in list(self.questions.items()):
-            if pending != qid:
-                continue
-            del self.questions[session_id]
-            if not future.done():
-                # Wording explained in the [DECK] rule the plugin adds at session start
-                future.set_result("Respuesta del usuario desde Claude Chip: " + ("sí" if yes else "no"))
-            s = self.sessions.get(session_id)
-            if s:
-                self.sessions.update(s, status=WORK, text="respuesta: sí. sigo..." if yes
-                                     else "respuesta: no. vale.")
-                log.info("[%s] question %s: %s (from device)", s.name, qid, "yes" if yes else "no")
-            self.schedule_state()
-            return
-        log.info("reply %s ignored: no longer pending", qid)
-
-    def _drop_question(self, session_id: str) -> None:
-        """Release a waiting question with no answer (answered in the terminal,
-        a new turn, the session closed)."""
-        entry = self.questions.pop(session_id, None)
-        if not entry:
-            return
-        if not entry[1].done():
-            entry[1].set_result(None)
-        s = self.sessions.get(session_id)
-        if s and s.status == QUESTION:
-            self.sessions.update(s, status=DONE)
-        self.schedule_state()
+        await self.broadcast({"type": "summary", "session_id": s.id, "status": status, "text": text})
 
     async def on_StopFailure(self, data: dict) -> None:
         await self._answered_elsewhere(data)

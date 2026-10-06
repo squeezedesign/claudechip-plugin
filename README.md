@@ -49,9 +49,9 @@ and the device finds it on the network.
   first answer wins. A device answer comes back as allow / deny; a terminal
   answer is noticed and the request is withdrawn from the device.
 - **Yes/no questions**: when Claude ends with one ("shall I go on?"), the
-  summary line is `[DECK?]`; OK / NO on the device answer it. The Stop hook
-  waits in the background (`asyncRewake`), so the terminal is never blocked:
-  answering there simply withdraws the question from the device.
+  summary line is `[DECK?]` and the device shows it as a pending question
+  with one beep (permissions beep twice). Answer it in the console: Claude
+  Code does not accept a hook as the user's answer.
 - **Plan approvals and questions with options** cannot be answered from the
   device: it beeps twice and asks you to answer in the console.
 - **Summaries**: with `deck_line`, a short rule added at session start asks
@@ -100,8 +100,8 @@ removes the manual hooks for you.
 Bridge → device: `hello` (bridge id, account, mac, color, nonce), `auth_ok`,
 `auth_fail`, `paired` (token, once), `revoked`, `state` (usage + sessions),
 `permission`, `permission_cancel`, `summary`, `history`, `recent`,
-`resume_result` (a `summary` with status `question` carries a `qid`). Device → bridge: `auth` (HMAC), `pair_request` (code), then
-signed `{"seq", "msg", "sig"}` envelopes carrying `decision`, `reply` (qid, yes), `history_get`,
+`resume_result`. Device → bridge: `auth` (HMAC), `pair_request` (code), then
+signed `{"seq", "msg", "sig"}` envelopes carrying `decision`, `history_get`,
 `recent_get` or `resume`.
 
 ## Development
