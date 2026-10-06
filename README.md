@@ -107,6 +107,8 @@ signed `{"seq", "msg", "sig"}` envelopes carrying `decision`, `history_get`,
 claude plugin validate .
 claude --plugin-dir . -p "hi"                                       # load it without installing
 uv run --with aiohttp python scripts/fake_device.py --answer ask    # a fake device
+# A test bridge next to the real one: own data dir and port, not announced on the LAN
+CLAUDECHIP_DATA_DIR=/tmp/cc CLAUDECHIP_NO_MDNS=1 python3 -m claudechip_bridge --config /tmp/cc/config.toml
 ```
 
 ## License

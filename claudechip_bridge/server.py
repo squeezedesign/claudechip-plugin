@@ -41,7 +41,9 @@ STATE_DEBOUNCE_S = 0.2  # coalesce bursts of hook events into one state message
 PAIR_TTL_S = 300         # a pairing code is valid for 5 minutes
 LIVENESS_EVERY_S = 15   # how often to check that session processes are alive
 CONTEXT_EVERY_S = 10    # read the transcript for CTX at most this often per session
+ORPHAN_AFTER_S = 600    # a session with no known process and no news for this long is dropped
 STATE_FILE = DATA_DIR / "sessions.json"
+ENDED_MEMORY = 64       # ended session ids remembered to drop their late events
 USAGE_POLL_S = 300           # direct usage reads (usage_source = "auto"); the endpoint rate-limits
 USAGE_FRESH_S = 600          # while direct reads work, ignore the status line
 
@@ -76,6 +78,9 @@ class Bridge:
         # Claude Code process of each session, sent by the hooks as X-Claude-Pid
         self.pids: dict[str, int] = {}
         self._context_read_at: dict[str, float] = {}  # last CTX read per session
+        # Sessions that ended: async hooks and the status line may still report
+        # them a moment later, which must not bring them back (oldest first)
+        self._ended: list[str] = []
         self._direct_usage_at = 0.0  # last successful direct usage read
         self._state_task: asyncio.Task | None = None
 
@@ -370,6 +375,11 @@ class Bridge:
         handler = getattr(self, f"on_{event}", None)
         if handler is None:
             return Response()  # empty 2xx: no decision, nothing to do
+        session_id = data.get("session_id", "")
+        if session_id in self._ended:
+            if event != "SessionStart":
+                return Response()  # a late event of a closed session
+            self._ended.remove(session_id)  # resumed: same id, alive again
         if event == "PermissionRequest":
             result = await handler(data, request)
         else:
@@ -397,6 +407,9 @@ class Bridge:
 
     async def _end_session(self, session_id: str, reason: str) -> None:
         self.pids.pop(session_id, None)
+        if session_id and session_id not in self._ended:
+            self._ended.append(session_id)
+            del self._ended[:-ENDED_MEMORY]
         s = self.sessions.remove(session_id)
         if s:
             log.info("[%s] %s", s.name, reason)
@@ -471,6 +484,11 @@ class Bridge:
             for session_id, pid in list(self.pids.items()):
                 if not _alive(pid):
                     await self._end_session(session_id, f"session gone (process {pid} ended)")
+            # Safety net: a session whose process was never reported
+            now = time.time()
+            for s in self.sessions.all():
+                if s.id not in self.pids and now - s.updated > ORPHAN_AFTER_S:
+                    await self._end_session(s.id, "session dropped (no process, no news)")
 
     async def on_UserPromptSubmit(self, data: dict) -> None:
         await self._answered_elsewhere(data)
@@ -631,10 +649,11 @@ class Bridge:
         changed = False
         direct_fresh = time.time() - self._direct_usage_at < USAGE_FRESH_S
         session_id = data.get("session_id")
-        if session_id:
-            ws = data.get("workspace") or {}
-            project = ws.get("project_dir") or ""
-            s = self.sessions.get_or_create(session_id, project or ws.get("current_dir") or data.get("cwd", ""))
+        # Only sessions the hooks announced: the status line has no process id,
+        # so a session it created could never be dropped once it closed
+        s = self.sessions.get(session_id) if session_id else None
+        if s:
+            project = (data.get("workspace") or {}).get("project_dir") or ""
             if project:
                 self.sessions.set_project(session_id, project)
             window = data.get("context_window") or {}
@@ -683,7 +702,9 @@ async def serve(cfg: Config, config_id: str = "") -> None:
         raise
 
     advertiser = Advertiser(cfg)
-    await advertiser.start()
+    # Test bridges set CLAUDECHIP_NO_MDNS: the real device must not find them
+    if not os.environ.get("CLAUDECHIP_NO_MDNS"):
+        await advertiser.start()
     tasks = [asyncio.ensure_future(bridge.watch_liveness())]
     if cfg.usage_source == "auto":
         tasks.append(asyncio.ensure_future(bridge.poll_usage()))
