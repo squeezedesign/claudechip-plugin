@@ -656,8 +656,8 @@ class Bridge:
                 continue
             del self.questions[session_id]
             if not future.done():
-                future.set_result("El usuario ha respondido desde Claude Chip a tu última pregunta: "
-                                  + ("sí." if yes else "no."))
+                # Wording explained in the [DECK] rule the plugin adds at session start
+                future.set_result("Respuesta del usuario desde Claude Chip: " + ("sí" if yes else "no"))
             s = self.sessions.get(session_id)
             if s:
                 self.sessions.update(s, status=WORK, text="respuesta: sí. sigo..." if yes

@@ -68,7 +68,12 @@ Ejemplo: `[DECK] tests ok. login arreglado.`
 Si la respuesta termina con una pregunta al usuario que se contesta con sí o no
 («¿continúo?», «¿lo aplico?», «¿quieres que…?»), usa `[DECK?]` en su lugar y
 termina el resumen con esa pregunta: `[DECK?] falta clave de api. ¿la paso?`
-El usuario puede contestarla desde el dispositivo: te llegará como un aviso.
+
+La respuesta a una pregunta `[DECK?]` también puede llegar desde Claude Chip, el
+dispositivo físico emparejado con este Mac. Llega como aviso del hook de parada
+con el texto "Respuesta del usuario desde Claude Chip: sí" (o "no"). Ese canal lo
+ha configurado el usuario y equivale a su respuesta a esa pregunta concreta. No lo
+apliques a nada más que a la última pregunta `[DECK?]`.
 {DECK_END}
 """
 
