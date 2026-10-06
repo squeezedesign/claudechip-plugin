@@ -26,12 +26,12 @@ from .httpserver import Request, Response
 from .httpserver import start as start_http
 from .websocket import WebSocket, is_upgrade
 
-from . import __version__, describe, resume, transcripts
+from . import __version__, describe, presence, resume, transcripts
 from .config import Config
 from .context import context_percent, learn_window
 from .identity import DATA_DIR, Devices, bridge_id, sign
 from .permissions import Permissions
-from .sessions import ASK, DONE, ERR, PERM, QUESTION, WORK, SessionStore, session_name
+from .sessions import ASK, CHOICE, DONE, ERR, PERM, QUESTION, WORK, SessionStore, session_name
 from .summary import clip, deck_question, summarize
 
 log = logging.getLogger("bridge")
@@ -42,6 +42,23 @@ PAIR_TTL_S = 300         # a pairing code is valid for 5 minutes
 LIVENESS_EVERY_S = 15   # how often to check that session processes are alive
 CONTEXT_EVERY_S = 10    # read the transcript for CTX at most this often per session
 ORPHAN_AFTER_S = 600    # a session with no known process and no news for this long is dropped
+BACK_IDLE_S = 3         # a question on the device returns to the terminal once the user is back
+MAX_CHOICE_QUESTIONS = 4
+
+
+@dataclass
+class _Choice:
+    """An AskUserQuestion shown on the device."""
+    request_id: str
+    session_id: str
+    questions: list
+    future: asyncio.Future
+
+    def to_json(self) -> dict:
+        return {"type": "choice", "request_id": self.request_id, "session_id": self.session_id,
+                "questions": [{"question": q.get("question", ""), "header": q.get("header", ""),
+                               "options": [o.get("label", "") for o in q.get("options", [])]}
+                              for q in self.questions]}
 STATE_FILE = DATA_DIR / "sessions.json"
 ENDED_MEMORY = 64       # ended session ids remembered to drop their late events
 USAGE_POLL_S = 300           # direct usage reads (usage_source = "auto"); the endpoint rate-limits
@@ -81,6 +98,8 @@ class Bridge:
         # Sessions that ended: async hooks and the status line may still report
         # them a moment later, which must not bring them back (oldest first)
         self._ended: list[str] = []
+        self.choices: dict[str, _Choice] = {}  # request id -> question on the device
+        self._choice_ids = 0
 
         self._direct_usage_at = 0.0  # last successful direct usage read
         self._state_task: asyncio.Task | None = None
@@ -253,6 +272,8 @@ class Bridge:
             await conn.ws.send_json(self.state_msg())
             for p in self.perms.all():  # requests that arrived while it was away
                 await conn.ws.send_json(p.to_json())
+            for c in self.choices.values():
+                await conn.ws.send_json(c.to_json())
         elif kind == "pair_request":
             code = str(data.get("code", ""))
             if len(code) != 6 or not code.isdigit() or not device_id:
@@ -321,6 +342,15 @@ class Bridge:
                 log.info("decision %s: %s (from device)", request_id, "allow" if allow else "deny")
             else:
                 log.info("decision %s ignored: already answered", request_id)
+        elif kind == "choice_answer":
+            c = self.choices.get(str(data.get("request_id", "")))
+            answers = data.get("answers")
+            if c and not c.future.done() and isinstance(answers, list):
+                c.future.set_result([str(a) for a in answers])
+        elif kind == "choice_decline":
+            c = self.choices.get(str(data.get("request_id", "")))
+            if c and not c.future.done():
+                c.future.set_result(None)  # NO on the device: answer in the terminal
         elif kind == "history_get":
             await self._send_history(conn, str(data.get("session_id", "")))
         elif kind == "recent_get":
@@ -381,7 +411,8 @@ class Bridge:
             if event != "SessionStart":
                 return Response()  # a late event of a closed session
             self._ended.remove(session_id)  # resumed: same id, alive again
-        if event == "PermissionRequest":
+        data["_plugin"] = request.headers.get("x-claude-plugin") == "1"
+        if event in ("PermissionRequest", "Ask"):
             result = await handler(data, request)
         else:
             result = await handler(data)
@@ -416,6 +447,9 @@ class Bridge:
             log.info("[%s] %s", s.name, reason)
             for p in self.perms.for_session(s.id):
                 await self._cancel_permission(p)
+            for c in [c for c in self.choices.values() if c.session_id == s.id]:
+                if not c.future.done():
+                    c.future.set_result(None)
             self.schedule_state()
 
     # ------------------------------------------------------------------
@@ -506,6 +540,8 @@ class Bridge:
         if s.status == PERM:
             return
         tool, tool_input = data.get("tool_name", ""), data.get("tool_input") or {}
+        if tool == "AskUserQuestion" and data.get("_plugin"):
+            return  # the plugin's Ask hook decides: device or terminal
         waiting = describe.waiting_text(tool, tool_input)
         if waiting:
             # Plan approval or a question: Claude stops until the user answers
@@ -513,6 +549,61 @@ class Bridge:
         else:
             self.sessions.update(s, status=WORK, text=describe.activity(tool, tool_input))
             self.schedule_state()
+
+    async def on_Ask(self, data: dict, request: Request) -> Optional[dict]:
+        """AskUserQuestion: the device answers when the user is away from the
+        Mac; otherwise (or if it cannot show it) the terminal asks as usual."""
+        s = self._session(data)
+        tool_input = data.get("tool_input") or {}
+        questions = tool_input.get("questions") or []
+        fits = (self.devices and 0 < len(questions) <= MAX_CHOICE_QUESTIONS
+                and all(not q.get("multiSelect") and 2 <= len(q.get("options") or []) <= 4
+                        for q in questions))
+        idle = await asyncio.to_thread(presence.idle_seconds) if fits else None
+        if not fits or idle is None or idle < self.cfg.away_after:
+            await self._ask(s, describe.waiting_text("AskUserQuestion", tool_input))
+            return None
+
+        self._choice_ids += 1
+        c = _Choice(f"a{self._choice_ids}", s.id, questions,
+                    asyncio.get_running_loop().create_future())
+        self.choices[c.request_id] = c
+        self.sessions.update(s, status=CHOICE, text=clip(questions[0].get("question", "")))
+        log.info("[%s] question %s to the device (Mac idle %ds)", s.name, c.request_id, idle)
+        await self.flush_state()
+        await self.broadcast(c.to_json())
+
+        # Wait for the device, the user coming back, or Claude Code dropping the hook
+        back = asyncio.ensure_future(self._user_back())
+        gone = asyncio.ensure_future(request.wait_disconnect())
+        await asyncio.wait({c.future, back, gone}, return_when=asyncio.FIRST_COMPLETED)
+        back.cancel()
+        gone.cancel()
+        self.choices.pop(c.request_id, None)
+        answers = c.future.result() if c.future.done() else None
+        if not answers:
+            await self.broadcast({"type": "choice_cancel", "request_id": c.request_id})
+            if not gone.done():
+                # Now asked in the terminal: shown quietly, the user is there
+                self.sessions.update(s, status=ASK, text=describe.waiting_text("AskUserQuestion", tool_input))
+            self.schedule_state()
+            log.info("[%s] question %s back to the terminal", s.name, c.request_id)
+            return None
+
+        log.info("[%s] question %s answered on the device: %s", s.name, c.request_id, answers)
+        self.sessions.update(s, status=WORK, text=clip("respuesta: " + ", ".join(answers)))
+        self.schedule_state()
+        updated = {**tool_input, "answers": {q.get("question", ""): a for q, a in zip(questions, answers)}}
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                       "updatedInput": updated}}
+
+    async def _user_back(self) -> None:
+        """Returns once someone touches the keyboard or the mouse."""
+        while True:
+            await asyncio.sleep(1)
+            idle = await asyncio.to_thread(presence.idle_seconds)
+            if idle is not None and idle < BACK_IDLE_S:
+                return
 
     async def _ask(self, s, text: str) -> None:
         """Claude waits for the user in the console: call attention on the device."""

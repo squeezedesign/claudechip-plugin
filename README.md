@@ -25,6 +25,7 @@ Then, in Claude Code, open `/plugin`, choose **claudechip** and set its options:
 | Account color | Hex color of the account's tabs and name, e.g. `#D7DF23` |
 | Summaries | `deck_line` (Claude ends each answer with a `[DECK]` line) or `truncate` |
 | Plan usage | `auto` (read from Anthropic with your Claude Code login; macOS asks once for Keychain access) or `statusline` |
+| Questions to the device after (s) | Claude's multiple-choice questions go to the device when nobody has touched this Mac for this long (default 60) |
 | Open sessions in | Where a session resumed from the device opens: `auto` (iTerm2 if installed, else Terminal), `iterm`, `terminal` or `phpstorm` (opens the project and copies the command) |
 | Port | Local port of the bridge (default 8765) |
 
@@ -52,8 +53,14 @@ and the device finds it on the network.
   summary line is `[DECK?]` and the device shows it as a pending question
   with one beep (permissions beep twice). Answer it in the console: Claude
   Code does not accept a hook as the user's answer.
-- **Plan approvals and questions with options** cannot be answered from the
-  device: it beeps twice and asks you to answer in the console.
+- **Multiple-choice questions** (Claude's AskUserQuestion; the session rule
+  asks Claude to prefer it over a question in the text): when nobody has
+  touched the Mac for `away_after` seconds, the device shows them (two beeps):
+  turn to pick an option, OK answers, NO sends it to the terminal. Touch the
+  Mac meanwhile and it moves to the terminal by itself. Otherwise, and for
+  multi-select questions, the terminal asks as usual.
+- **Plan approvals** cannot be answered from the device: it beeps twice and
+  asks you to answer in the console.
 - **Summaries**: with `deck_line`, a short rule added at session start asks
   Claude to end each answer with `[DECK] …`; otherwise the first sentence.
 - **History**: the bridge keeps the last 20 summaries of each session; hold
@@ -100,8 +107,8 @@ removes the manual hooks for you.
 Bridge → device: `hello` (bridge id, account, mac, color, nonce), `auth_ok`,
 `auth_fail`, `paired` (token, once), `revoked`, `state` (usage + sessions),
 `permission`, `permission_cancel`, `summary`, `history`, `recent`,
-`resume_result`. Device → bridge: `auth` (HMAC), `pair_request` (code), then
-signed `{"seq", "msg", "sig"}` envelopes carrying `decision`, `history_get`,
+`resume_result`, `choice`, `choice_cancel`. Device → bridge: `auth` (HMAC), `pair_request` (code), then
+signed `{"seq", "msg", "sig"}` envelopes carrying `decision`, `choice_answer` / `choice_decline`, `history_get`,
 `recent_get` or `resume`.
 
 ## Development

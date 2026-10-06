@@ -47,6 +47,7 @@ def desired_config() -> dict:
         "summary": option("summary", "deck_line"),
         "usage_source": option("usage_source", "auto"),
         "open_in": option("open_in", "auto"),
+        "away_after": int(option("away_after", "60")),
     }
 
 

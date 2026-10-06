@@ -43,6 +43,16 @@
             "async": true
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"${CLAUDE_PLUGIN_ROOT}/claudechip_bridge/ask.py\"",
+            "timeout": 86400
+          }
+        ]
       }
     ],
     "PostToolUse": [

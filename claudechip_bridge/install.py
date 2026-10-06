@@ -69,6 +69,11 @@ Si la respuesta termina con una pregunta al usuario que se contesta con sí o no
 («¿continúo?», «¿lo aplico?», «¿quieres que…?»), usa `[DECK?]` en su lugar y
 termina el resumen con esa pregunta: `[DECK?] falta clave de api. ¿la paso?`
 El dispositivo la muestra como pregunta pendiente; el usuario contesta aquí.
+
+Mejor aún: cuando necesites que el usuario decida algo (sí o no, o entre
+opciones), pregúntalo con la herramienta AskUserQuestion en vez de en el texto.
+Si el usuario no está delante del ordenador, puede contestarla desde el
+dispositivo.
 {DECK_END}
 """
 

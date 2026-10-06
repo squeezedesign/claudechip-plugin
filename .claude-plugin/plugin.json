@@ -1,7 +1,7 @@
 {
   "name": "claudechip",
   "displayName": "Claude Chip",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "Connects Claude Code to the Claude Chip desk device: session status, short summaries and approve/deny keys.",
   "author": {
     "name": "Squeeze Design",
@@ -67,6 +67,14 @@
         "phpstorm"
       ],
       "default": "auto"
+    },
+    "away_after": {
+      "type": "number",
+      "title": "Questions to the device after (s)",
+      "description": "Claude's multiple-choice questions go to the device when nobody has touched this Mac for this many seconds; otherwise they show in the terminal.",
+      "default": 60,
+      "min": 0,
+      "max": 3600
     },
     "port": {
       "type": "number",

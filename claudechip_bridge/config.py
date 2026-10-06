@@ -35,6 +35,7 @@ class Config:
     summary: str = "deck_line"
     usage_source: str = "auto"
     open_in: str = "auto"  # where "resume" opens a session (SPEC phase 5)
+    away_after: int = 60   # seconds without touching the Mac: Claude's questions go to the device
     dev_token: str = ""  # obsolete since pairing; accepted and ignored
 
     @property

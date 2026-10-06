@@ -21,3 +21,7 @@ usage_source = "auto"
 # if installed, else Terminal.app), "iterm", "terminal" or "phpstorm" (opens the
 # project and copies the resume command to the clipboard).
 open_in = "auto"
+
+# Claude's multiple-choice questions go to the device when nobody has touched
+# this Mac for this many seconds (otherwise they show in the terminal).
+away_after = 60
