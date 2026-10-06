@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 
 # Status values understood by the device. ASK: Claude waits for the user in
 # the console (plan approval, a question) and the device can only call attention.
-WORK, PERM, DONE, ERR, ASK = "work", "perm", "done", "err", "ask"
+# QUESTION: Claude ended with a yes/no question the device can answer.
+WORK, PERM, DONE, ERR, ASK, QUESTION = "work", "perm", "done", "err", "ask", "question"
 
 NAME_MAX = 23     # firmware Session::name is 24 bytes
 HISTORY_MAX = 20  # summaries kept per session for the device's history view

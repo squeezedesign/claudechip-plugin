@@ -6,7 +6,8 @@ import re
 
 MAX_CHARS = 100
 
-_DECK_RE = re.compile(r"^\s*\[DECK\]\s*(.+?)\s*$", re.MULTILINE)
+# [DECK] summary, or [DECK?] when the answer ends with a yes/no question
+_DECK_RE = re.compile(r"^\s*\[DECK(\??)\]\s*(.+?)\s*$", re.MULTILINE)
 _CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
 _MARKDOWN_RE = re.compile(r"[*_`#>|]+")
 
@@ -23,7 +24,13 @@ def summarize(message: str, method: str) -> str:
 def deck_line(message: str) -> str | None:
     """The last '[DECK] ...' line of the answer, if any."""
     matches = _DECK_RE.findall(message)
-    return clip(matches[-1]) if matches else None
+    return clip(matches[-1][1]) if matches else None
+
+
+def deck_question(message: str) -> bool:
+    """True when the last summary line is '[DECK?]': a yes/no question."""
+    matches = _DECK_RE.findall(message or "")
+    return bool(matches) and matches[-1][0] == "?"
 
 
 def truncate(message: str) -> str:

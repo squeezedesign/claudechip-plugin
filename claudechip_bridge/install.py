@@ -63,7 +63,12 @@ Termina SIEMPRE cada respuesta con una última línea con este formato exacto:
 
 El resumen va en español, en minúsculas, estilo telegráfico (frases muy cortas,
 sin artículos si sobran), sin markdown y con 100 caracteres como máximo.
-Ejemplos: `[DECK] tests ok. login arreglado.` · `[DECK] falta clave de api. ¿la paso?`
+Ejemplo: `[DECK] tests ok. login arreglado.`
+
+Si la respuesta termina con una pregunta al usuario que se contesta con sí o no
+(«¿continúo?», «¿lo aplico?», «¿quieres que…?»), usa `[DECK?]` en su lugar y
+termina el resumen con esa pregunta: `[DECK?] falta clave de api. ¿la paso?`
+El usuario puede contestarla desde el dispositivo: te llegará como un aviso.
 {DECK_END}
 """
 

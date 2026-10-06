@@ -19,6 +19,7 @@ run() {
 }
 run "hook.sh"       "$ROOT/scripts/hook.sh" Stop
 run "forward.py"    /usr/bin/python3 "$ROOT/claudechip_bridge/forward.py"
+run "question.py"   /usr/bin/python3 "$ROOT/claudechip_bridge/question.py"
 run "statusline.py" /usr/bin/python3 "$ROOT/claudechip_bridge/statusline.py" 9
 run "cli.sh status" "$ROOT/scripts/cli.sh" status
 # launch.py would start a bridge: only check that it imports and parses options
