@@ -41,6 +41,9 @@ class Session:
     title: str = ""          # Claude Code's title for the conversation
     transcript: str = ""     # path of its transcript, from the hooks
     started: float = field(default_factory=time.time)
+    # A brand-new session stays hidden from the device until it is used: the
+    # VS Code extension keeps an idle, empty session process ready in advance
+    used: bool = True
     updated: float = field(default_factory=time.time)
     # Latest summaries, oldest first: {"t": epoch, "status", "text"}
     history: list = field(default_factory=list)
@@ -103,6 +106,8 @@ class SessionStore:
         seen: dict[str, int] = {}
         result = []
         for s in self.all():
+            if not s.used:
+                continue
             n = seen[s.name] = seen.get(s.name, 0) + 1
             name = s.name if n == 1 else _fit(s.name, NAME_MAX - len(f" {n}")) + f" {n}"
             result.append(s.to_json(name))

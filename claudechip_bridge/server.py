@@ -426,10 +426,17 @@ class Bridge:
             self.sessions.set_project(session_id, project)
         if data.get("transcript_path"):
             s.transcript = data["transcript_path"]
+        # Anything but its start or an idle notification means it is in use
+        if not s.used and data.get("hook_event_name") not in ("SessionStart", "Notification", None):
+            s.used = True
         return s
 
     async def on_SessionStart(self, data: dict) -> None:
         s = self._session(data)
+        # A resumed or compacted session already has a conversation: show it now.
+        # A new one only once something happens in it (see _session)
+        if data.get("source") in ("startup", "clear"):
+            s.used = False
         self.sessions.update(s, status=DONE, text="sesión lista. ¿qué hacemos?")
         log.info("[%s] session started (%s)", s.name, data.get("source", "?"))
         self.schedule_state()
@@ -458,7 +465,7 @@ class Bridge:
 
     def save_sessions(self) -> None:
         data = [{**s.to_json(), "cwd": s.cwd, "pid": self.pids.get(s.id), "started": s.started,
-                 "transcript": s.transcript, "history": s.history}
+                 "transcript": s.transcript, "history": s.history, "used": s.used}
                 for s in self.sessions.all() if s.id in self.pids]
         try:
             STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -487,6 +494,9 @@ class Bridge:
             s.transcript = item.get("transcript", "")
             s.started = item.get("started", s.started)
             s.history = item.get("history", [])
+            # Saved before "used" existed: a session with no transcript was never used
+            transcript = s.transcript
+            s.used = item.get("used", bool(transcript) and Path(transcript).exists())
             self.pids[s.id] = pid
         if self.sessions.all():
             log.info("restored %d session(s): %s", len(self.sessions.all()),
