@@ -42,6 +42,8 @@ PAIR_TTL_S = 300         # a pairing code is valid for 5 minutes
 LIVENESS_EVERY_S = 15   # how often to check that session processes are alive
 CONTEXT_EVERY_S = 10    # read the transcript for CTX at most this often per session
 ORPHAN_AFTER_S = 600    # a session with no known process and no news for this long is dropped
+EXHAUSTED_PCT = 99.5    # a plan window this full counts as used up
+RESET_CHECK_S = 15      # how often to look for a used-up window that has reset
 BACK_IDLE_S = 3         # a question on the device returns to the terminal once the user is back
 MAX_CHOICE_QUESTIONS = 4
 
@@ -102,6 +104,9 @@ class Bridge:
         self._choice_ids = 0
 
         self._direct_usage_at = 0.0  # last successful direct usage read
+        # Used-up plan windows: window -> resets_at seen when it was used up
+        self._exhausted: dict[str, float] = {}
+        self._announced: dict[str, float] = {}  # window -> resets_at already announced
         self._state_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
@@ -523,6 +528,31 @@ class Bridge:
                     self.schedule_state()
             await asyncio.sleep(USAGE_POLL_S)
 
+    async def watch_resets(self) -> None:
+        """Tell the device when a plan window that was used up is available
+        again (its reset time passed, or a fresh reading shows it below 100 %)."""
+        while True:
+            await asyncio.sleep(RESET_CHECK_S)
+            now = time.time()
+            for window, (pct, resets_at) in list(self.usage.items()):
+                # A stale 100 % reading after the reset must not count again
+                if (pct >= EXHAUSTED_PCT and window not in self._exhausted
+                        and self._announced.get(window) != resets_at):
+                    self._exhausted[window] = resets_at
+                    log.info("%s used up until %s", window, time.strftime("%H:%M", time.localtime(resets_at)))
+                    continue
+                if window not in self._exhausted:
+                    continue
+                was_reset = self._exhausted[window]
+                if (was_reset and now >= was_reset) or pct < EXHAUSTED_PCT:
+                    del self._exhausted[window]
+                    self._announced[window] = was_reset
+                    name = {"five_hour": "ses", "seven_day": "sem"}.get(window)
+                    if name:
+                        log.info("%s available again", window)
+                        await self.broadcast({"type": "usage_reset", "window": name})
+                        self.schedule_state()
+
     async def watch_liveness(self) -> None:
         """Drop sessions whose Claude Code process is gone without a SessionEnd
         (crash, window reload, killed terminal)."""
@@ -812,7 +842,7 @@ async def serve(cfg: Config, config_id: str = "") -> None:
     # Test bridges set CLAUDECHIP_NO_MDNS: the real device must not find them
     if not os.environ.get("CLAUDECHIP_NO_MDNS"):
         await advertiser.start()
-    tasks = [asyncio.ensure_future(bridge.watch_liveness())]
+    tasks = [asyncio.ensure_future(bridge.watch_liveness()), asyncio.ensure_future(bridge.watch_resets())]
     if cfg.usage_source == "auto":
         tasks.append(asyncio.ensure_future(bridge.poll_usage()))
     log.info("bridge %s listening on port %d (mDNS %s)", cfg.account, cfg.port, advertiser.name)

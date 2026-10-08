@@ -70,6 +70,7 @@ and the device finds it on the network.
   The device can only pick one from the list the bridge sent; the folder and
   the command never come from it. The first time, macOS asks whether the
   bridge may control iTerm / Terminal.
+- **Limit available again**: when a plan window (SES or SEM) was used up, the bridge tells the device as soon as it resets; it beeps and blinks green for 10 s (the touch stops it).
 - **Usage**: plan usage (SES / SEM) straight from Anthropic every 5 minutes,
   or from the status line; context (CTX) from each session's transcript.
 - **State** lives in `~/.config/claudechip/`: paired devices, sessions,
@@ -107,7 +108,7 @@ removes the manual hooks for you.
 Bridge → device: `hello` (bridge id, account, mac, color, nonce), `auth_ok`,
 `auth_fail`, `paired` (token, once), `revoked`, `state` (usage + sessions),
 `permission`, `permission_cancel`, `summary`, `history`, `recent`,
-`resume_result`, `choice`, `choice_cancel`. Device → bridge: `auth` (HMAC), `pair_request` (code), then
+`resume_result`, `choice`, `choice_cancel`, `usage_reset` (a used-up window is available again). Device → bridge: `auth` (HMAC), `pair_request` (code), then
 signed `{"seq", "msg", "sig"}` envelopes carrying `decision`, `choice_answer` / `choice_decline`, `history_get`,
 `recent_get` or `resume`.
 
