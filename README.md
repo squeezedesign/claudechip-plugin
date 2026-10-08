@@ -32,6 +32,20 @@ Then, in Claude Code, open `/plugin`, choose **claudechip** and set its options:
 Start a new Claude Code session: the bridge starts by itself in the background
 and the device finds it on the network.
 
+Then run `/claudechip:setup` once, so terminal sessions report plan usage and
+the bridge starts when you log in to the Mac.
+
+## Update
+
+```sh
+claude plugin marketplace update claudechip
+claude plugin update claudechip@claudechip
+```
+
+Then start a new Claude Code session: the bridge notices the new version and
+restarts with it. `/claudechip:setup` does not update the plugin; run it again
+only if a release note says so.
+
 ## Commands
 
 | Command | |
