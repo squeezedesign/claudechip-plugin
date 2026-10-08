@@ -25,6 +25,7 @@ ROOT = os.path.realpath(os.environ.get("CLAUDE_PLUGIN_ROOT")
                         or os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
+from claudechip_bridge import __version__  # noqa: E402
 from claudechip_bridge.config import plugin_config_path  # noqa: E402
 from claudechip_bridge.install import DECK_RULE  # noqa: E402
 
@@ -63,6 +64,13 @@ def write_config(cfg: dict) -> str:
     if not path.exists() or path.read_text() != text:
         path.write_text(text)
     return hashlib.sha1(text.encode()).hexdigest()[:12]
+
+
+def version_key(version: str) -> tuple:
+    try:
+        return tuple(int(p) for p in str(version).split("."))
+    except ValueError:
+        return ()
 
 
 def health(port: int):
@@ -105,7 +113,12 @@ def main() -> None:
     port = cfg["port"]
 
     running = health(port)
-    if running and (running.get("config_id") != fingerprint or running.get("root") != ROOT):
+    # A session opened before an update (an editor window left open) still runs
+    # the old plugin: it must never take the bridge back to its older version
+    newer_running = running and version_key(running.get("version")) > version_key(__version__)
+    if newer_running:
+        pass
+    elif running and (running.get("config_id") != fingerprint or running.get("root") != ROOT):
         # Options changed or the plugin was updated: restart with the new ones
         post(port, "/shutdown", b"{}")
         for _ in range(20):
@@ -117,7 +130,7 @@ def main() -> None:
         start_bridge(port)
     # Where the login LaunchAgent (/claudechip:setup) finds the current version
     root_file = plugin_config_path().parent / "plugin_root"
-    if not root_file.exists() or root_file.read_text().strip() != ROOT:
+    if not newer_running and (not root_file.exists() or root_file.read_text().strip() != ROOT):
         root_file.write_text(ROOT + "\n")
 
     post(port, "/hook/SessionStart", event, {
