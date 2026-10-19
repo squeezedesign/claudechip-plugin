@@ -21,7 +21,10 @@ def main() -> None:
     port = os.environ.get("CLAUDE_PLUGIN_OPTION_PORT") or "8765"
     url = sys.argv[1] if len(sys.argv) > 1 else f"http://127.0.0.1:{port}/hook/PermissionRequest"
     data = sys.stdin.buffer.read()
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(url, data=data, headers={
+        "Content-Type": "application/json",
+        "X-Claude-Config-Dir": os.environ.get("CLAUDE_CONFIG_DIR", ""),  # which account
+    })
     try:
         with urllib.request.urlopen(req) as resp:  # no timeout: wait for an answer
             sys.stdout.buffer.write(resp.read())

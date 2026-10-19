@@ -2,8 +2,10 @@
 """SessionStart hook of the Claude Chip plugin.
 
 1. Writes the bridge config from the plugin options (CLAUDE_PLUGIN_OPTION_*).
-2. Makes sure one bridge is running on this Mac: starts it in the background
+2. Makes sure this account's bridge is running: starts it in the background
    if needed, and restarts it when the options or the plugin version changed.
+   Another account on the same Mac (CLAUDE_CONFIG_DIR) has its own bridge,
+   which needs its own port: it is never stopped from here.
 3. Forwards the SessionStart event to the bridge.
 4. Adds the [DECK] rule to the session context (summary = "deck_line").
 
@@ -28,6 +30,7 @@ sys.path.insert(0, ROOT)
 from claudechip_bridge import __version__  # noqa: E402
 from claudechip_bridge.config import plugin_config_path  # noqa: E402
 from claudechip_bridge.install import DECK_RULE  # noqa: E402
+from claudechip_bridge.paths import claude_dir  # noqa: E402
 
 LOG_MAX_BYTES = 1 << 20
 START_WAIT_S = 4
@@ -113,6 +116,16 @@ def main() -> None:
     port = cfg["port"]
 
     running = health(port)
+    # The port is taken by the bridge of another account on this Mac (bridges
+    # older than 0.5.0 did not report their folder: they serve ~/.claude)
+    other = running and os.path.normpath(running.get("claude_dir") or os.path.expanduser(
+        "~/.claude")) != os.path.normpath(str(claude_dir()))
+    if other:
+        print(json.dumps({"systemMessage": (
+            f"Claude Chip: port {port} is used by the bridge of account "
+            f"{running.get('account')}. Set another port for this account in /plugin "
+            f"(claudechip options), e.g. {port + 1}.")}, ensure_ascii=False))
+        return
     # A session opened before an update (an editor window left open) still runs
     # the old plugin: it must never take the bridge back to its older version
     newer_running = running and version_key(running.get("version")) > version_key(__version__)
@@ -136,6 +149,7 @@ def main() -> None:
     post(port, "/hook/SessionStart", event, {
         "X-Claude-Pid": str(os.getppid()),
         "X-Claude-Project": os.environ.get("CLAUDE_PROJECT_DIR", ""),
+        "X-Claude-Config-Dir": os.environ.get("CLAUDE_CONFIG_DIR", ""),
     })
 
     if cfg["summary"] == "deck_line":

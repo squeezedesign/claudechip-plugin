@@ -2,7 +2,8 @@
 """Starts the bridge when you log in to the Mac (LaunchAgent set up by
 /claudechip:setup), so the device connects without opening Claude Code first.
 
-A copy of this file lives in ~/.config/claudechip/: the plugin folder changes
+A copy of this file lives in the account's data folder (~/.config/claudechip/,
+or claudechip-<name>/ for another CLAUDE_CONFIG_DIR): the plugin folder changes
 with every update, so it runs the plugin version recorded by the last
 SessionStart (plugin_root). If a bridge is already running the new one exits.
 """
@@ -10,7 +11,7 @@ SessionStart (plugin_root). If a bridge is already running the new one exits.
 import os
 from pathlib import Path
 
-DATA_DIR = Path.home() / ".config" / "claudechip"
+DATA_DIR = Path(__file__).resolve().parent  # the copy lives in the data folder
 
 
 def main() -> None:

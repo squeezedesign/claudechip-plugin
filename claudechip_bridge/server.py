@@ -30,6 +30,7 @@ from . import __version__, describe, presence, resume, transcripts
 from .config import Config
 from .context import context_percent, learn_window
 from .identity import DATA_DIR, Devices, bridge_id, sign
+from .paths import claude_dir
 from .permissions import Permissions
 from .sessions import ASK, CHOICE, DONE, ERR, PERM, QUESTION, WORK, SessionStore, session_name
 from .summary import clip, deck_question, summarize
@@ -132,12 +133,25 @@ class Bridge:
             data = req.json()
         except ValueError:
             return Response(400)
+        if (req.path.startswith("/hook/") or req.path == "/statusline") and not self.own_account(req):
+            return Response.json({})  # another account's session reached this port: not ours
         if req.path.startswith("/hook/"):
             return await self.handle_hook(req, req.path[len("/hook/"):], data)
         routes = {"/statusline": self.handle_statusline, "/pair": self.handle_pair,
                   "/revoke": self.handle_revoke}
         handler = routes.get(req.path)
         return await handler(data) if handler else Response(404)
+
+    @staticmethod
+    def own_account(req: Request) -> bool:
+        """Hooks and the status line say which config folder their session uses
+        (empty: ~/.claude). Two accounts on one Mac set to the same port must
+        not mix their sessions. Senders older than 0.5.0 do not say: accepted."""
+        sent = req.headers.get("x-claude-config-dir")
+        if sent is None:
+            return True
+        theirs = os.path.expanduser(sent.strip() or "~/.claude")
+        return os.path.normpath(theirs) == os.path.normpath(str(claude_dir()))
 
     # ------------------------------------------------------------------
     # Messages to the device
@@ -151,6 +165,7 @@ class Bridge:
             "version": __version__,
             "root": str(Path(__file__).resolve().parent.parent),
             "config_id": self.config_id,
+            "claude_dir": str(claude_dir()),  # tells apart two accounts on one Mac
             "account": self.cfg.account,
             "mac": self.cfg.mac,
             "port": self.cfg.port,

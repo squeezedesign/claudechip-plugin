@@ -1,6 +1,7 @@
 """Plan usage straight from Anthropic, like the /usage command does.
 
-Reads the Claude Code login from the macOS Keychain ("Claude Code-credentials")
+Reads the Claude Code login from the macOS Keychain ("Claude Code-credentials",
+with a suffix for an account in another CLAUDE_CONFIG_DIR)
 and asks the usage endpoint. The token is only sent to api.anthropic.com and is
 never logged or stored. The first time, macOS asks whether `security` may read
 the item.
@@ -21,7 +22,9 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 
-KEYCHAIN_SERVICE = "Claude Code-credentials"
+from .paths import keychain_service
+
+KEYCHAIN_SERVICE = keychain_service()
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 SYSTEM_CA_FILE = "/etc/ssl/cert.pem"
 WINDOWS = ("five_hour", "seven_day")

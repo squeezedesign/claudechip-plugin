@@ -22,7 +22,8 @@ def main() -> None:
         f"http://127.0.0.1:{port}/hook/Ask", data=sys.stdin.buffer.read(),
         headers={"Content-Type": "application/json",
                  "X-Claude-Pid": str(os.getppid()),
-                 "X-Claude-Project": os.environ.get("CLAUDE_PROJECT_DIR", "")})
+                 "X-Claude-Project": os.environ.get("CLAUDE_PROJECT_DIR", ""),
+                 "X-Claude-Config-Dir": os.environ.get("CLAUDE_CONFIG_DIR", "")})
     try:
         with urllib.request.urlopen(req) as resp:  # no timeout: the bridge decides
             sys.stdout.buffer.write(resp.read())

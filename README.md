@@ -4,7 +4,7 @@ Connects Claude Code to the **Claude Chip** desk device: it shows what each
 session is doing, short summaries of every answer, and lets you approve or
 deny permission requests with physical keys.
 
-It runs a small bridge on your Mac (one per Mac) that receives Claude Code
+It runs a small bridge on your Mac (one per Mac and Claude Code account) that receives Claude Code
 events through hooks and talks to the device over the local network. No
 dependencies: it uses the `python3` that ships with macOS and macOS's
 `dns-sd`. macOS only for now.
@@ -45,6 +45,24 @@ claude plugin update claudechip@claudechip
 Then start a new Claude Code session: the bridge notices the new version and
 restarts with it. `/claudechip:setup` does not update the plugin; run it again
 only if a release note says so.
+
+## Two accounts on one Mac
+
+If you use two Claude Code accounts on the same Mac, the second one with
+`CLAUDE_CONFIG_DIR` (e.g. `~/.claude-personal`), install the plugin in each
+account: each one gets its own bridge, data folder (`~/.config/claudechip-<name>`),
+login LaunchAgent and pairing, and shows as its own account on the device.
+
+```sh
+CLAUDE_CONFIG_DIR=~/.claude-personal claude plugin marketplace add squeezedesign/claudechip-plugin
+CLAUDE_CONFIG_DIR=~/.claude-personal claude plugin install claudechip@claudechip
+```
+
+In that account's `/plugin` options, give it **another port** (e.g. `8766`),
+its own name and color. If both use the same port, the second account's
+sessions show a message asking you to change it. Then pair it from its row
+on the device (`/claudechip:pair <code>` in a session of that account) and run
+`/claudechip:setup` there too.
 
 ## Commands
 

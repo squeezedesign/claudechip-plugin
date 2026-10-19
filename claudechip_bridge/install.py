@@ -1,10 +1,11 @@
 """Install / uninstall the bridge integration in the user's Claude Code config.
 
 install:
-  - backs up ~/.claude/settings.json
+  - backs up settings.json in the Claude Code config folder (~/.claude, or
+    CLAUDE_CONFIG_DIR for another account on the same Mac)
   - adds hooks that forward every event to the local bridge
   - wraps the status line (the previous one keeps working)
-  - with summary = "deck_line", adds the [DECK] rule to ~/.claude/CLAUDE.md
+  - with summary = "deck_line", adds the [DECK] rule to CLAUDE.md there
 uninstall reverses all of it.
 """
 
@@ -19,11 +20,12 @@ import time
 from pathlib import Path
 
 from .config import Config
+from .paths import agent_label, claude_dir, data_dir, is_default_account
 
-CLAUDE_DIR = Path.home() / ".claude"
+CLAUDE_DIR = claude_dir()
 SETTINGS = CLAUDE_DIR / "settings.json"
 CLAUDE_MD = CLAUDE_DIR / "CLAUDE.md"
-STATE_DIR = Path.home() / ".config" / "claudechip"
+STATE_DIR = data_dir()
 PREVIOUS_STATUSLINE = STATE_DIR / "statusline_previous.json"
 WRAPPER = Path(__file__).resolve().parent / "statusline.py"
 FORWARDER = Path(__file__).resolve().parent / "forward.py"
@@ -212,7 +214,7 @@ def uninstall(cfg: Config) -> None:
 STABLE_WRAPPER = STATE_DIR / "statusline.py"
 AUTOSTART = Path(__file__).resolve().parent / "autostart.py"
 STABLE_AUTOSTART = STATE_DIR / "autostart.py"
-AGENT_LABEL = "es.squeezedesign.claudechip"
+AGENT_LABEL = agent_label()
 AGENT_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{AGENT_LABEL}.plist"
 
 
@@ -240,7 +242,7 @@ def setup_plugin(cfg: Config) -> None:
 
     if CLAUDE_MD.exists() and DECK_START in CLAUDE_MD.read_text():
         _remove_deck_rule()
-        print("[DECK] rule removed from ~/.claude/CLAUDE.md (the plugin adds it at session start)")
+        print(f"[DECK] rule removed from {CLAUDE_MD} (the plugin adds it at session start)")
 
     _install_login_agent()
     print("bridge starts when you log in to this Mac (LaunchAgent)")
@@ -258,6 +260,9 @@ def _install_login_agent() -> None:
         "StandardOutPath": str(log),
         "StandardErrorPath": str(log),
     }
+    if not is_default_account():
+        # The bridge of another account reads that account's folder and login
+        plist["EnvironmentVariables"] = {"CLAUDE_CONFIG_DIR": str(CLAUDE_DIR)}
     AGENT_PLIST.parent.mkdir(parents=True, exist_ok=True)
     with AGENT_PLIST.open("wb") as f:
         plistlib.dump(plist, f)

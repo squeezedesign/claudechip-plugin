@@ -1,4 +1,4 @@
-"""What the bridge reads from Claude Code's transcripts (~/.claude/projects).
+"""What the bridge reads from Claude Code's transcripts (<config dir>/projects).
 
 - The title Claude Code gives each conversation (the one in its history list),
   to tell apart two sessions of the same project.
@@ -15,9 +15,10 @@ import os
 import re
 import time
 from pathlib import Path
+from .paths import claude_dir
 from .summary import clip, summarize
 
-PROJECTS_DIR = Path.home() / ".claude" / "projects"
+PROJECTS_DIR = claude_dir() / "projects"
 HEAD_BYTES = 64 * 1024
 TAIL_BYTES = 256 * 1024
 TITLE_MAX = 60

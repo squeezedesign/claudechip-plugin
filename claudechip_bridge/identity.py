@@ -10,13 +10,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import os
 import secrets
 import time
-from pathlib import Path
 
-# CLAUDECHIP_DATA_DIR keeps tests away from the real paired devices
-DATA_DIR = Path(os.environ.get("CLAUDECHIP_DATA_DIR") or Path.home() / ".config" / "claudechip")
+from .paths import data_dir
+
+DATA_DIR = data_dir()  # one per Claude Code account (paths.py)
 BRIDGE_ID_FILE = DATA_DIR / "bridge_id"
 DEVICES_FILE = DATA_DIR / "devices.json"
 

@@ -17,14 +17,27 @@ import subprocess
 import sys
 import urllib.request
 
-PREVIOUS = os.path.expanduser("~/.config/claudechip/statusline_previous.json")
+
+def data_dir() -> str:
+    """The account's data folder, as paths.data_dir_for() (no package here)."""
+    default = os.path.expanduser("~/.claude")
+    claude = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR", "").strip() or default)
+    base = os.path.expanduser("~/.config/claudechip")
+    if os.path.normpath(claude) == os.path.normpath(default):
+        return base
+    name = os.path.basename(os.path.normpath(claude)).lstrip(".").lower()
+    return os.path.join(os.path.dirname(base), "claudechip-" + name)
+
+
+PREVIOUS = os.path.join(data_dir(), "statusline_previous.json")
 
 
 def forward(port: str, data: bytes) -> None:
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/statusline",
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json",
+                 "X-Claude-Config-Dir": os.environ.get("CLAUDE_CONFIG_DIR", "")},
     )
     try:
         urllib.request.urlopen(req, timeout=0.3).close()

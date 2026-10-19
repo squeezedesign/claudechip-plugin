@@ -12,6 +12,7 @@ import os
 import shlex
 import subprocess
 
+from .paths import claude_dir, is_default_account
 from .transcripts import is_session_id
 
 OSASCRIPT_TIMEOUT_S = 60  # the macOS Automation prompt blocks until answered
@@ -39,7 +40,9 @@ class ResumeError(Exception):
 
 
 def resume_command(cwd: str, session_id: str) -> str:
-    return f"cd {shlex.quote(cwd)} && claude --resume {session_id}"
+    # Another account's session only resumes with its own config folder
+    env = "" if is_default_account() else f"CLAUDE_CONFIG_DIR={shlex.quote(str(claude_dir()))} "
+    return f"cd {shlex.quote(cwd)} && {env}claude --resume {session_id}"
 
 
 def _osascript(script: str, command: str) -> None:
