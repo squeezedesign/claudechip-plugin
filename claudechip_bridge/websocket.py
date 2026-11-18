@@ -58,8 +58,14 @@ class WebSocket:
         else:
             head = struct.pack("!BBQ", 0x80 | opcode, 127, n)
         async with self._lock:  # frames from different tasks must not interleave
-            self.writer.write(head + payload)
-            await self.writer.drain()
+            try:
+                self.writer.write(head + payload)
+                await self.writer.drain()
+            except OSError as exc:
+                # Any socket error (a timeout is not a ConnectionError) means
+                # the device is gone: callers only need to handle ConnectionError
+                self.closed = True
+                raise ConnectionError(str(exc)) from exc
 
     async def send_str(self, text: str) -> None:
         await self._send_frame(OP_TEXT, text.encode())
@@ -75,7 +81,10 @@ class WebSocket:
         except ConnectionError:
             pass
         self.closed = True
-        self.writer.close()
+        try:
+            self.writer.close()
+        except OSError:
+            pass
 
     # --------------------------------------------------------------- receive
 
@@ -96,7 +105,7 @@ class WebSocket:
                     return None
                 mask = await self.reader.readexactly(4) if b2 & 0x80 else b""
                 data = await self.reader.readexactly(n)
-            except (asyncio.IncompleteReadError, ConnectionError):
+            except (asyncio.IncompleteReadError, OSError):  # OSError: also timeouts
                 self.closed = True
                 return None
             if mask:
